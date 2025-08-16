@@ -3,7 +3,7 @@ import { DndContext, DragEndEvent, PointerSensor, useSensor, useSensors } from "
 import { SortableContext, useSortable, arrayMove, verticalListSortingStrategy } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
 import { motion, AnimatePresence } from "framer-motion";
-import { CalendarDays, CheckCircle2, GripVertical, PartyPopper, RotateCcw, Upload, Lock, CalendarClock, Trophy, Rocket, Sparkles } from "lucide-react";
+import { CalendarDays, CheckCircle2, GripVertical, PartyPopper, RotateCcw, Upload, Lock, CalendarClock, Trophy, Rocket, Sparkles, Plus, Pencil, MoreVertical, Copy, Trash2 } from "lucide-react";
 
 // ---------- Types ----------
 type Goal = { id: string; title: string; picked: boolean; completed: boolean };
@@ -88,16 +88,76 @@ const DEFAULT_DATA: Category[] = [
 ];
 
 // ---------- Sortable Item ----------
-function SortableGoal({ goal, onTogglePicked, onToggleCompleted, disabledDrag, disabledPick, disabledComplete }: { goal: Goal; onTogglePicked: () => void; onToggleCompleted: () => void; disabledDrag: boolean; disabledPick: boolean; disabledComplete: boolean; }) {
+function SortableGoal({ goal, onTogglePicked, onToggleCompleted, onRename, onDuplicate, onDelete, disabledDrag, disabledPick, disabledComplete, disabledRename, disabledManage }: { goal: Goal; onTogglePicked: () => void; onToggleCompleted: () => void; onRename: (newTitle: string) => void; onDuplicate: () => void; onDelete: () => void; disabledDrag: boolean; disabledPick: boolean; disabledComplete: boolean; disabledRename: boolean; disabledManage: boolean; }) {
   const { attributes, listeners, setNodeRef, transform, transition } = useSortable({ id: goal.id, disabled: disabledDrag });
   const style: React.CSSProperties = { transform: CSS.Transform.toString(transform), transition };
+  const [editing, setEditing] = useState(false);
+  const [temp, setTemp] = useState(goal.title);
+  const [menuOpen, setMenuOpen] = useState(false);
+
+  const commitRename = () => {
+    const v = temp.trim();
+    if (v && v !== goal.title) onRename(v);
+    setEditing(false);
+  };
+
   return (
     <div ref={setNodeRef} style={style} className={`group flex items-center gap-3 rounded-2xl border border-neutral-200 bg-white p-3 shadow-sm ${disabledDrag ? "" : "hover:shadow-md"}`}>
       <button className={`rounded-xl border border-neutral-200 p-2 ${disabledDrag ? "cursor-not-allowed opacity-50" : "cursor-grab active:cursor-grabbing"}`} {...(!disabledDrag ? { ...attributes, ...listeners } : {})} aria-label="Drag to reorder">
         <GripVertical className="h-4 w-4 opacity-60" />
       </button>
       <div className="flex-1">
-        <div className="text-sm font-medium text-neutral-800">{goal.title}</div>
+        {editing ? (
+          <input
+            autoFocus
+            value={temp}
+            onChange={(e) => setTemp(e.target.value)}
+            onBlur={commitRename}
+            onKeyDown={(e) => { if (e.key === 'Enter') commitRename(); if (e.key === 'Escape') { setTemp(goal.title); setEditing(false); } }}
+            className="w-full rounded-lg border border-neutral-300 px-2 py-1 text-sm"
+          />
+        ) : (
+          <div className="flex items-center justify-between gap-2">
+            <div className="text-sm font-medium text-neutral-800">{goal.title}</div>
+            <div className="relative flex items-center gap-1">
+              <button
+                className={`rounded-lg px-2 py-1 text-[11px] ${disabledRename ? 'cursor-not-allowed opacity-40' : 'hover:bg-neutral-100'}`}
+                onClick={() => { if (!disabledRename) { setTemp(goal.title); setEditing(true); } }}
+                title={disabledRename ? 'Cannot rename in past weeks' : 'Rename goal'}
+              >
+                <Pencil className="h-4 w-4" />
+              </button>
+              <div className="relative" onBlur={() => setMenuOpen(false)} tabIndex={-1}>
+                <button
+                  className={`rounded-lg px-2 py-1 text-[11px] ${disabledManage ? 'cursor-not-allowed opacity-40' : 'hover:bg-neutral-100'}`}
+                  onClick={() => { if (!disabledManage) setMenuOpen(v => !v); }}
+                  title={disabledManage ? 'Actions disabled in past weeks' : 'More actions'}
+                >
+                  <MoreVertical className="h-4 w-4" />
+                </button>
+                {menuOpen && (
+                  <div className="absolute right-0 z-20 mt-1 w-40 overflow-hidden rounded-xl border border-neutral-200 bg-white py-1 text-sm shadow-xl">
+                    <button
+                      className={`flex w-full items-center gap-2 px-3 py-2 text-left hover:bg-neutral-50 ${disabledManage ? 'cursor-not-allowed opacity-50' : ''}`}
+                      disabled={disabledManage}
+                      onClick={() => { setMenuOpen(false); onDuplicate(); }}
+                    >
+                      <Copy className="h-4 w-4"/> Duplicate
+                    </button>
+                    <button
+                      type="button"
+                      className={`flex w-full items-center gap-2 px-3 py-2 text-left text-rose-600 hover:bg-rose-50 ${disabledManage ? 'cursor-not-allowed opacity-50' : ''}`}
+                      disabled={disabledManage}
+                      onMouseDown={() => { setMenuOpen(false); if (confirm('Delete this goal?')) onDelete(); }}
+                    >
+                      <Trash2 className="h-4 w-4"/> Delete
+                    </button>
+                  </div>
+                )}
+              </div>
+            </div>
+          </div>
+        )}
         <div className="mt-1 flex items-center gap-4 text-[12px] text-neutral-600">
           <label className={`inline-flex items-center gap-2 ${disabledPick ? "opacity-50" : ""}`}>
             <input type="checkbox" className="accent-black h-5 w-5" checked={goal.picked} onChange={onTogglePicked} disabled={disabledPick} />
@@ -143,12 +203,12 @@ import { getFirestore, doc, setDoc, getDoc, serverTimestamp } from "firebase/fir
 import { getStorage, ref as storageRef, uploadBytes, getDownloadURL } from "firebase/storage";
 
 const FIREBASE_CONFIG = {
-  apiKey: "AIzaSyCi96DII_BSsZfn8FsdGkjTcUbYrwd_Yf4",
-  authDomain: "week-gaols.firebaseapp.com",
-  projectId: "week-gaols",
-  storageBucket: "week-gaols.firebasestorage.app",
-  messagingSenderId: "213614122894",
-  appId:"1:213614122894:web:aa7c849086047a24ebb6df",
+  apiKey: (import.meta as any).env?.VITE_FIREBASE_API_KEY || "",
+  authDomain: (import.meta as any).env?.VITE_FIREBASE_AUTH_DOMAIN || "",
+  projectId: (import.meta as any).env?.VITE_FIREBASE_PROJECT_ID || "",
+  storageBucket: (import.meta as any).env?.VITE_FIREBASE_STORAGE_BUCKET || "",
+  messagingSenderId: (import.meta as any).env?.VITE_FIREBASE_MESSAGING_SENDER_ID || "",
+  appId: (import.meta as any).env?.VITE_FIREBASE_APP_ID || "",
 };
 
 let _fbApp: any; let db: any; let storage: any;
@@ -335,6 +395,44 @@ export default function GoalChallengeApp() {
 
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 6 } }));
 
+  // Add/Rename helpers and input state
+  const [newGoalText, setNewGoalText] = useState<Record<string, string>>({});
+  const addGoal = (catId: string, title: string) => {
+    if (isPast) return; // no edits in the past
+    if (!title) return;
+    setCategories(prev => prev.map(c => c.id !== catId ? c : ({
+      ...c,
+      goals: [...c.goals, { id: uid(), title, picked: false, completed: false }]
+    })));
+    setNewGoalText(prev => ({ ...prev, [catId]: '' }));
+  };
+  const renameGoal = (catId: string, goalId: string, newTitle: string) => {
+    if (isPast) return; // no edits in the past
+    setCategories(prev => prev.map(c => c.id !== catId ? c : ({
+      ...c,
+      goals: c.goals.map(g => g.id !== goalId ? g : ({ ...g, title: newTitle }))
+    })));
+  };
+  const duplicateGoal = (catId: string, goalId: string) => {
+    if (isPast) return; // no edits in the past
+    setCategories(prev => prev.map(c => {
+      if (c.id !== catId) return c;
+      const g = c.goals.find(x => x.id === goalId);
+      if (!g) return c;
+      return {
+        ...c,
+        goals: [...c.goals, { id: uid(), title: g.title + " (copy)", picked: false, completed: false }]
+      };
+    }));
+  };
+  const deleteGoal = (catId: string, goalId: string) => {
+    if (isPast) return; // no edits in the past
+    setCategories(prev => prev.map(c => c.id !== catId ? c : ({
+      ...c,
+      goals: c.goals.filter(g => g.id !== goalId)
+    })));
+  };
+
   // Persist per-week
   useEffect(() => { localStorage.setItem(weekKey, JSON.stringify(categories)); }, [categories, weekKey]);
 
@@ -478,10 +576,35 @@ export default function GoalChallengeApp() {
                               disabledComplete={isPast || isFuture}
                               onTogglePicked={() => togglePicked(cat.id, goal.id)}
                               onToggleCompleted={() => toggleCompleted(cat.id, goal.id)}
+                              onRename={(newTitle) => renameGoal(cat.id, goal.id, newTitle)}
+                              onDuplicate={() => duplicateGoal(cat.id, goal.id)}
+                              onDelete={() => deleteGoal(cat.id, goal.id)}
+                              disabledRename={isPast}
+                              disabledManage={isPast}
                             />
                           ))}
                         </div>
                       </SortableContext>
+
+                      {/* Add new goal */}
+                      <div className="mt-3 flex items-center gap-2">
+                        <input
+                          value={newGoalText[cat.id] || ''}
+                          onChange={(e) => setNewGoalText(prev => ({ ...prev, [cat.id]: e.target.value }))}
+                          onKeyDown={(e) => { if (e.key === 'Enter') { addGoal(cat.id, (newGoalText[cat.id] || '').trim()); } }}
+                          placeholder="Add a new goal"
+                          disabled={isPast}
+                          className={`flex-1 rounded-xl border border-neutral-300 bg-white px-3 py-2 text-sm ${isPast ? 'opacity-50' : ''}`}
+                        />
+                        <button
+                          onClick={() => addGoal(cat.id, (newGoalText[cat.id] || '').trim())}
+                          disabled={isPast}
+                          className={`inline-flex items-center gap-1 rounded-xl bg-black px-3 py-2 text-xs text-white shadow-sm ${isPast ? 'opacity-50 cursor-not-allowed' : 'hover:bg-neutral-800'}`}
+                          title={isPast ? 'Cannot add goals in past weeks' : 'Add goal'}
+                        >
+                          <Plus className="h-4 w-4" /> Add
+                        </button>
+                      </div>
                     </div>
                   );
                 })}
