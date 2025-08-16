@@ -134,13 +134,14 @@ function Toast({ show, title, subtitle, onClose }: { show: boolean; title: strin
   );
 }
 
-// ---------- Profile Page (Firebase) ----------
-// NOTE: Requires `npm install firebase` and your Firebase web app config below.
+// ---------- Profile Page (Firebase Web SDK - Option 2) ----------
+// Uses Firebase Web SDK directly in the browser. No custom backend required.
+// Add your Firebase config in Vite env vars before running (see instructions below).
+
 import { initializeApp } from "firebase/app";
 import { getFirestore, doc, setDoc, getDoc, serverTimestamp } from "firebase/firestore";
 import { getStorage, ref as storageRef, uploadBytes, getDownloadURL } from "firebase/storage";
 
-// Fill these with your Firebase project's Web App config
 const FIREBASE_CONFIG = {
   apiKey: "AIzaSyCi96DII_BSsZfn8FsdGkjTcUbYrwd_Yf4",
   authDomain: "week-gaols.firebaseapp.com",
@@ -150,12 +151,12 @@ const FIREBASE_CONFIG = {
   appId:"1:213614122894:web:aa7c849086047a24ebb6df",
 };
 
-let appInstance: any; let db: any; let storage: any;
+let _fbApp: any; let db: any; let storage: any;
 function ensureFirebase() {
-  if (!appInstance) {
-    appInstance = initializeApp(FIREBASE_CONFIG);
-    db = getFirestore(appInstance);
-    storage = getStorage(appInstance);
+  if (!_fbApp) {
+    _fbApp = initializeApp(FIREBASE_CONFIG);
+    db = getFirestore(_fbApp);
+    storage = getStorage(_fbApp);
   }
   return { db, storage };
 }
@@ -309,7 +310,7 @@ function ProfilePage() {
           <div className="mb-3 flex aspect-square w-full items-center justify-center rounded-2xl bg-neutral-100 text-xs text-neutral-500">No photo</div>
         )}
         <input type="file" accept="image/*" onChange={e => onFile(e.target.files?.[0] || null)} className="w-full text-sm" />
-        <p className="mt-2 text-xs text-neutral-500">Pick an image (PNG/JPG). It will be uploaded to Firebase Storage on save.</p>
+        <p className="mt-2 text-xs text-neutral-500">Uploaded to Firebase Storage on save.</p>
       </div>
     </div>
   );
