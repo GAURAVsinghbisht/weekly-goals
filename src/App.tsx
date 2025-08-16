@@ -3,7 +3,7 @@ import { DndContext, DragEndEvent, PointerSensor, useSensor, useSensors } from "
 import { SortableContext, useSortable, arrayMove, verticalListSortingStrategy } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
 import { motion, AnimatePresence } from "framer-motion";
-import { CalendarDays, CheckCircle2, GripVertical, PartyPopper, RotateCcw, Upload, Lock, CalendarClock } from "lucide-react";
+import { CalendarDays, CheckCircle2, GripVertical, PartyPopper, RotateCcw, Upload, Lock, CalendarClock, Trophy, Rocket, Sparkles } from "lucide-react";
 
 // ---------- Types ----------
 type Goal = { id: string; title: string; picked: boolean; completed: boolean };
@@ -404,6 +404,41 @@ export default function GoalChallengeApp() {
 
         {tab === "goals" ? (
           <>
+            {/* Intro hero */}
+            <div className="mt-2 mb-3">
+              <h1 className="text-3xl md:text-4xl font-extrabold tracking-tight bg-gradient-to-r from-slate-900 to-slate-600 bg-clip-text text-transparent">
+                The Goal Challenge!
+              </h1>
+              <p className="mt-1 text-sm md:text-base text-neutral-700">
+                Select any 2 goals from each category to follow and make your entire week exciting.
+              </p>
+            </div>
+
+            {/* Milestones explainer */}
+            <div className="mb-2 grid grid-cols-1 gap-3 md:grid-cols-3">
+              <div className="flex items-start gap-3 rounded-2xl border border-emerald-200 bg-gradient-to-br from-emerald-50 to-lime-100 p-3">
+                <div className="rounded-xl bg-emerald-600/90 p-2 text-white"><Trophy className="h-5 w-5"/></div>
+                <div>
+                  <div className="text-sm font-semibold text-emerald-900">Brilliant</div>
+                  <div className="text-xs text-emerald-800/80">If you have completed <span className="font-semibold">2 activities</span> from <span className="font-semibold">all 6 categories</span>.</div>
+                </div>
+              </div>
+              <div className="flex items-start gap-3 rounded-2xl border border-indigo-200 bg-gradient-to-br from-indigo-50 to-fuchsia-100 p-3">
+                <div className="rounded-xl bg-indigo-600/90 p-2 text-white"><Rocket className="h-5 w-5"/></div>
+                <div>
+                  <div className="text-sm font-semibold text-indigo-900">You rock</div>
+                  <div className="text-xs text-indigo-800/80">If you have completed <span className="font-semibold">2 activities</span> from <span className="font-semibold">4 categories</span>.</div>
+                </div>
+              </div>
+              <div className="flex items-start gap-3 rounded-2xl border border-amber-200 bg-gradient-to-br from-amber-50 to-orange-100 p-3">
+                <div className="rounded-xl bg-amber-500/90 p-2 text-white"><Sparkles className="h-5 w-5"/></div>
+                <div>
+                  <div className="text-sm font-semibold text-amber-900">You're on the right track</div>
+                  <div className="text-xs text-amber-800/80">If you have completed <span className="font-semibold">2 activities</span> from <span className="font-semibold">2 categories</span>.</div>
+                </div>
+              </div>
+            </div>
+
             {/* Mode badge */}
             <div className="mt-1">
               <span className={`inline-flex items-center gap-2 rounded-full px-3 py-1 text-xs text-white ${modeInfo.color}`}>
