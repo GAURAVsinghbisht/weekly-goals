@@ -127,7 +127,14 @@ function SortableGoal({ goal, onTogglePicked, onToggleCompleted, onRename, onDup
               >
                 <Pencil className="h-4 w-4" />
               </button>
-              <div className="relative" onBlur={() => setMenuOpen(false)} tabIndex={-1}>
+              <div
+              className="relative"
+              tabIndex={0}
+              onBlur={(e) => {
+                const next = e.relatedTarget as Node | null;
+                if (!next || !e.currentTarget.contains(next)) setMenuOpen(false);
+              }}
+            >
                 <button
                   className={`rounded-lg px-2 py-1 text-[11px] ${disabledManage ? 'cursor-not-allowed opacity-40' : 'hover:bg-neutral-100'}`}
                   onClick={() => { if (!disabledManage) setMenuOpen(v => !v); }}
@@ -140,15 +147,14 @@ function SortableGoal({ goal, onTogglePicked, onToggleCompleted, onRename, onDup
                     <button
                       className={`flex w-full items-center gap-2 px-3 py-2 text-left hover:bg-neutral-50 ${disabledManage ? 'cursor-not-allowed opacity-50' : ''}`}
                       disabled={disabledManage}
-                      onClick={() => { setMenuOpen(false); onDuplicate(); }}
+                      type="button" onMouseDown={() => { setMenuOpen(false); onDuplicate(); }}
                     >
                       <Copy className="h-4 w-4"/> Duplicate
                     </button>
                     <button
-                      type="button"
                       className={`flex w-full items-center gap-2 px-3 py-2 text-left text-rose-600 hover:bg-rose-50 ${disabledManage ? 'cursor-not-allowed opacity-50' : ''}`}
                       disabled={disabledManage}
-                      onMouseDown={() => { setMenuOpen(false); if (confirm('Delete this goal?')) onDelete(); }}
+                      type="button" onMouseDown={() => { setMenuOpen(false); onDelete(); }}
                     >
                       <Trash2 className="h-4 w-4"/> Delete
                     </button>
@@ -193,6 +199,33 @@ function Toast({ show, title, subtitle, onClose }: { show: boolean; title: strin
     </AnimatePresence>
   );
 }
+
+// Pretty confirm dialog
+function ConfirmDialog({ open, title, description, confirmText = "Delete", cancelText = "Cancel", onConfirm, onCancel }: { open: boolean; title: string; description?: string; confirmText?: string; cancelText?: string; onConfirm: () => void; onCancel: () => void; }) {
+  return (
+    <AnimatePresence>
+      {open && (
+        <motion.div className="fixed inset-0 z-[60] flex items-center justify-center" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}>
+          <div className="absolute inset-0 bg-black/40" onClick={onCancel} />
+          <motion.div initial={{ scale: 0.95, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} exit={{ scale: 0.98, opacity: 0 }} transition={{ type: 'spring', stiffness: 200, damping: 20 }} className="relative mx-4 w-full max-w-sm overflow-hidden rounded-2xl border border-rose-200 bg-white shadow-2xl">
+            <div className="flex items-center gap-3 bg-gradient-to-r from-rose-600 to-pink-500 px-4 py-3 text-white">
+              <div className="rounded-xl bg-white/20 p-2"><Trash2 className="h-5 w-5"/></div>
+              <div className="text-sm font-semibold">{title}</div>
+            </div>
+            <div className="p-4 text-sm text-neutral-700">
+              {description && <p>{description}</p>}
+            </div>
+            <div className="flex items-center justify-end gap-2 bg-neutral-50 px-4 py-3">
+              <button onClick={onCancel} className="rounded-xl border border-neutral-300 bg-white px-3 py-2 text-sm hover:bg-neutral-100">{cancelText}</button>
+              <button onClick={onConfirm} className="rounded-xl bg-rose-600 px-3 py-2 text-sm text-white shadow hover:bg-rose-700">{confirmText}</button>
+            </div>
+          </motion.div>
+        </motion.div>
+      )}
+    </AnimatePresence>
+  );
+}
+          
 
 // ---------- Profile Page (Firebase Web SDK - Option 2) ----------
 // Uses Firebase Web SDK directly in the browser. No custom backend required.
@@ -395,6 +428,17 @@ export default function GoalChallengeApp() {
 
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 6 } }));
 
+  // Pretty confirm dialog state & helpers
+  const [confirmDel, setConfirmDel] = useState<{ open: boolean; catId?: string; goalId?: string; title?: string }>({ open: false });
+  const requestDelete = (catId: string, goalId: string, title: string) => {
+    if (isPast) return; // safety
+    setConfirmDel({ open: true, catId, goalId, title });
+  };
+  const confirmDelete = () => {
+    if (confirmDel.catId && confirmDel.goalId) deleteGoal(confirmDel.catId, confirmDel.goalId);
+    setConfirmDel({ open: false });
+  };
+
   // Add/Rename helpers and input state
   const [newGoalText, setNewGoalText] = useState<Record<string, string>>({});
   const addGoal = (catId: string, title: string) => {
@@ -578,7 +622,7 @@ export default function GoalChallengeApp() {
                               onToggleCompleted={() => toggleCompleted(cat.id, goal.id)}
                               onRename={(newTitle) => renameGoal(cat.id, goal.id, newTitle)}
                               onDuplicate={() => duplicateGoal(cat.id, goal.id)}
-                              onDelete={() => deleteGoal(cat.id, goal.id)}
+                              onDelete={() => requestDelete(cat.id, goal.id, goal.title)}
                               disabledRename={isPast}
                               disabledManage={isPast}
                             />
@@ -619,6 +663,16 @@ export default function GoalChallengeApp() {
           Week starts on <span className="font-medium">Monday</span>. Your progress is saved per week locally in your browser.
         </div>
       </div>
+
+      <ConfirmDialog
+        open={confirmDel.open}
+        title="Delete this goal?"
+        description={confirmDel.title ? `This will remove "${confirmDel.title}" from this week.` : undefined}
+        confirmText="Delete"
+        cancelText="Cancel"
+        onConfirm={confirmDelete}
+        onCancel={() => setConfirmDel({ open: false })}
+      />
 
       <Toast show={toast.show} title={toast.title} subtitle={toast.subtitle} onClose={() => setToast(s => ({ ...s, show: false }))} />
     </div>
