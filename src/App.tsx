@@ -3,13 +3,31 @@ import { DndContext, DragEndEvent, PointerSensor, useSensor, useSensors } from "
 import { SortableContext, useSortable, arrayMove, verticalListSortingStrategy } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
 import { motion, AnimatePresence } from "framer-motion";
-import { CalendarDays, CheckCircle2, GripVertical, PartyPopper, RotateCcw, Upload, Lock, CalendarClock, Trophy, Rocket, Sparkles, Plus, Pencil, MoreVertical, Copy, Trash2 } from "lucide-react";
+import { CalendarDays, CheckCircle2, GripVertical, PartyPopper, Lock, CalendarClock, Trophy, Rocket, Sparkles, Plus, Pencil, MoreVertical, Copy, Trash2 } from "lucide-react";
+// Firebase (Option 2: Client SDK)
+import { initializeApp } from "firebase/app";
+import { getFirestore, doc, setDoc, getDoc, serverTimestamp } from "firebase/firestore";
+import { getStorage, ref as storageRef, uploadBytes, getDownloadURL } from "firebase/storage";
 
-// ---------- Types ----------
-type Goal = { id: string; title: string; picked: boolean; completed: boolean };
-type Category = { id: string; name: string; goals: Goal[] };
+// ============================
+// Types
+// ============================
+export type Goal = { id: string; title: string; picked: boolean; completed: boolean };
+export type Category = { id: string; name: string; goals: Goal[] };
+export type Profile = {
+  name: string;
+  age?: number | "";
+  sex?: "Male" | "Female" | "Other" | "";
+  email?: string;
+  bloodGroup?: string;
+  maritalStatus?: "Single" | "Married" | "Other" | "";
+  occupation?: "Job" | "Business" | "Student" | "Other" | "";
+  photoUrl?: string;
+};
 
-// ---------- Utilities ----------
+// ============================
+// Utilities
+// ============================
 function uid() { return Math.random().toString(36).slice(2, 9); }
 
 function startOfWeekKolkata(date = new Date()) {
@@ -33,7 +51,9 @@ function fmtDateUTCYYYYMMDD(d: Date) {
   return `${yyyy}-${mm}-${dd}`;
 }
 
-// ---------- Theming ----------
+// ============================
+// Theming
+// ============================
 const PALETTES: Record<string, { col: string; chip: string; border: string; heading: string; }> = {
   health:    { col: "bg-gradient-to-br from-emerald-100 to-emerald-200", chip: "bg-emerald-600 text-white", border:"border-emerald-300", heading:"text-emerald-900" },
   learning:  { col: "bg-gradient-to-br from-sky-100 to-indigo-200",     chip: "bg-indigo-600 text-white",  border:"border-indigo-300", heading:"text-indigo-900" },
@@ -52,7 +72,9 @@ function paletteFor(name: string) {
   return PALETTES.fun;
 }
 
-// ---------- Default Data ----------
+// ============================
+// Default Data
+// ============================
 const DEFAULT_DATA: Category[] = [
   { id: uid(), name: "Health & Energy", goals: [
     { id: uid(), title: "30‑min workout", picked: false, completed: false },
@@ -87,7 +109,94 @@ const DEFAULT_DATA: Category[] = [
   ]},
 ];
 
-// ---------- Sortable Item ----------
+// ============================
+// UI Primitives
+// ============================
+function Toast({ show, title, subtitle, onClose }: { show: boolean; title: string; subtitle?: string; onClose: () => void; }) {
+  useEffect(() => { if (!show) return; const t = setTimeout(onClose, 4000); return () => clearTimeout(t); }, [show, onClose]);
+  return (
+    <AnimatePresence>
+      {show && (
+        <motion.div initial={{ y: 50, opacity: 0 }} animate={{ y: 0, opacity: 1 }} exit={{ y: 50, opacity: 0 }} className="fixed bottom-6 left-1/2 z-50 -translate-x-1/2">
+          <div className="flex items-start gap-3 rounded-2xl bg-gradient-to-tr from-indigo-600 to-fuchsia-500 p-4 text-white shadow-2xl">
+            <PartyPopper className="mt-0.5 h-6 w-6" />
+            <div>
+              <div className="text-sm font-semibold">{title}</div>
+              {subtitle && <div className="text-xs opacity-90">{subtitle}</div>}
+            </div>
+          </div>
+        </motion.div>
+      )}
+    </AnimatePresence>
+  );
+}
+
+function ConfirmDialog({ open, title, description, confirmText = "Delete", cancelText = "Cancel", onConfirm, onCancel }: { open: boolean; title: string; description?: string; confirmText?: string; cancelText?: string; onConfirm: () => void; onCancel: () => void; }) {
+  return (
+    <AnimatePresence>
+      {open && (
+        <motion.div className="fixed inset-0 z-[60] flex items-center justify-center" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}>
+          <div className="absolute inset-0 bg-black/40" onClick={onCancel} />
+          <motion.div initial={{ scale: 0.95, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} exit={{ scale: 0.98, opacity: 0 }} transition={{ type: 'spring', stiffness: 200, damping: 20 }} className="relative mx-4 w-full max-w-sm overflow-hidden rounded-2xl border border-rose-200 bg-white shadow-2xl">
+            <div className="flex items-center gap-3 bg-gradient-to-r from-rose-600 to-pink-500 px-4 py-3 text-white">
+              <div className="rounded-xl bg-white/20 p-2"><Trash2 className="h-5 w-5"/></div>
+              <div className="text-sm font-semibold">{title}</div>
+            </div>
+            <div className="p-4 text-sm text-neutral-700">
+              {description && <p>{description}</p>}
+            </div>
+            <div className="flex items-center justify-end gap-2 bg-neutral-50 px-4 py-3">
+              <button onClick={onCancel} className="rounded-xl border border-neutral-300 bg-white px-3 py-2 text-sm hover:bg-neutral-100">{cancelText}</button>
+              <button onClick={onConfirm} className="rounded-xl bg-rose-600 px-3 py-2 text-sm text-white shadow hover:bg-rose-700">{confirmText}</button>
+            </div>
+          </motion.div>
+        </motion.div>
+      )}
+    </AnimatePresence>
+  );
+}
+
+function MilestoneCard({ level, active, label, desc }: { level: "right" | "rocking" | "brilliant"; active: boolean; label: string; desc: string; }) {
+  const palette = level === "brilliant" ? "bg-gradient-to-tr from-emerald-500 to-lime-500" : level === "rocking" ? "bg-gradient-to-tr from-indigo-500 to-fuchsia-500" : "bg-gradient-to-tr from-amber-500 to-orange-500";
+  return (
+    <div className={`relative overflow-hidden rounded-3xl border border-neutral-200 p-4 shadow-sm ${active ? palette + " text-white" : "bg-white"}`}>
+      <div className="flex items-center gap-3">
+        <div className={`rounded-2xl ${active ? "bg-white/15" : "bg-neutral-100"} p-2`}>{active ? <CheckCircle2 className="h-5 w-5" /> : <CheckCircle2 className="h-5 w-5 text-neutral-400" />}</div>
+        <div>
+          <div className={`text-sm font-semibold ${active ? "" : "text-neutral-800"}`}>{label}</div>
+          <div className={`text-xs ${active ? "opacity-90" : "text-neutral-500"}`}>{desc}</div>
+        </div>
+      </div>
+      {active && (<motion.div initial={{ scale: 0 }} animate={{ scale: 1 }} transition={{ type: "spring", stiffness: 120, damping: 10 }} className="pointer-events-none absolute -right-8 -top-8 h-24 w-24 rounded-full bg-white/20" />)}
+    </div>
+  );
+}
+
+// ============================
+// Firebase init (client)
+// ============================
+const FIREBASE_CONFIG = {
+  apiKey: (import.meta as any).env?.VITE_FIREBASE_API_KEY || "",
+  authDomain: (import.meta as any).env?.VITE_FIREBASE_AUTH_DOMAIN || "",
+  projectId: (import.meta as any).env?.VITE_FIREBASE_PROJECT_ID || "",
+  storageBucket: (import.meta as any).env?.VITE_FIREBASE_STORAGE_BUCKET || "",
+  messagingSenderId: (import.meta as any).env?.VITE_FIREBASE_MESSAGING_SENDER_ID || "",
+  appId: (import.meta as any).env?.VITE_FIREBASE_APP_ID || "",
+};
+
+let _fbApp: any; let db: any; let storage: any;
+function ensureFirebase() {
+  if (!_fbApp) {
+    _fbApp = initializeApp(FIREBASE_CONFIG);
+    db = getFirestore(_fbApp);
+    storage = getStorage(_fbApp);
+  }
+  return { db, storage };
+}
+
+// ============================
+// Sortable Goal Item
+// ============================
 function SortableGoal({ goal, onTogglePicked, onToggleCompleted, onRename, onDuplicate, onDelete, disabledDrag, disabledPick, disabledComplete, disabledRename, disabledManage }: { goal: Goal; onTogglePicked: () => void; onToggleCompleted: () => void; onRename: (newTitle: string) => void; onDuplicate: () => void; onDelete: () => void; disabledDrag: boolean; disabledPick: boolean; disabledComplete: boolean; disabledRename: boolean; disabledManage: boolean; }) {
   const { attributes, listeners, setNodeRef, transform, transition } = useSortable({ id: goal.id, disabled: disabledDrag });
   const style: React.CSSProperties = { transform: CSS.Transform.toString(transform), transition };
@@ -128,13 +237,13 @@ function SortableGoal({ goal, onTogglePicked, onToggleCompleted, onRename, onDup
                 <Pencil className="h-4 w-4" />
               </button>
               <div
-              className="relative"
-              tabIndex={0}
-              onBlur={(e) => {
-                const next = e.relatedTarget as Node | null;
-                if (!next || !e.currentTarget.contains(next)) setMenuOpen(false);
-              }}
-            >
+                className="relative"
+                tabIndex={0}
+                onBlur={(e) => {
+                  const next = e.relatedTarget as Node | null;
+                  if (!next || !e.currentTarget.contains(next)) setMenuOpen(false);
+                }}
+              >
                 <button
                   className={`rounded-lg px-2 py-1 text-[11px] ${disabledManage ? 'cursor-not-allowed opacity-40' : 'hover:bg-neutral-100'}`}
                   onClick={() => { if (!disabledManage) setMenuOpen(v => !v); }}
@@ -147,14 +256,16 @@ function SortableGoal({ goal, onTogglePicked, onToggleCompleted, onRename, onDup
                     <button
                       className={`flex w-full items-center gap-2 px-3 py-2 text-left hover:bg-neutral-50 ${disabledManage ? 'cursor-not-allowed opacity-50' : ''}`}
                       disabled={disabledManage}
-                      type="button" onMouseDown={() => { setMenuOpen(false); onDuplicate(); }}
+                      type="button"
+                      onMouseDown={() => { setMenuOpen(false); onDuplicate(); }}
                     >
                       <Copy className="h-4 w-4"/> Duplicate
                     </button>
                     <button
                       className={`flex w-full items-center gap-2 px-3 py-2 text-left text-rose-600 hover:bg-rose-50 ${disabledManage ? 'cursor-not-allowed opacity-50' : ''}`}
                       disabled={disabledManage}
-                      type="button" onMouseDown={() => { setMenuOpen(false); onDelete(); }}
+                      type="button"
+                      onMouseDown={() => { setMenuOpen(false); onDelete(); }}
                     >
                       <Trash2 className="h-4 w-4"/> Delete
                     </button>
@@ -180,91 +291,9 @@ function SortableGoal({ goal, onTogglePicked, onToggleCompleted, onRename, onDup
   );
 }
 
-// ---------- Notification (Toast) ----------
-function Toast({ show, title, subtitle, onClose }: { show: boolean; title: string; subtitle?: string; onClose: () => void; }) {
-  useEffect(() => { if (!show) return; const t = setTimeout(onClose, 4000); return () => clearTimeout(t); }, [show, onClose]);
-  return (
-    <AnimatePresence>
-      {show && (
-        <motion.div initial={{ y: 50, opacity: 0 }} animate={{ y: 0, opacity: 1 }} exit={{ y: 50, opacity: 0 }} className="fixed bottom-6 left-1/2 z-50 -translate-x-1/2">
-          <div className="flex items-start gap-3 rounded-2xl bg-gradient-to-tr from-indigo-600 to-fuchsia-500 p-4 text-white shadow-2xl">
-            <PartyPopper className="mt-0.5 h-6 w-6" />
-            <div>
-              <div className="text-sm font-semibold">{title}</div>
-              {subtitle && <div className="text-xs opacity-90">{subtitle}</div>}
-            </div>
-          </div>
-        </motion.div>
-      )}
-    </AnimatePresence>
-  );
-}
-
-// Pretty confirm dialog
-function ConfirmDialog({ open, title, description, confirmText = "Delete", cancelText = "Cancel", onConfirm, onCancel }: { open: boolean; title: string; description?: string; confirmText?: string; cancelText?: string; onConfirm: () => void; onCancel: () => void; }) {
-  return (
-    <AnimatePresence>
-      {open && (
-        <motion.div className="fixed inset-0 z-[60] flex items-center justify-center" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}>
-          <div className="absolute inset-0 bg-black/40" onClick={onCancel} />
-          <motion.div initial={{ scale: 0.95, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} exit={{ scale: 0.98, opacity: 0 }} transition={{ type: 'spring', stiffness: 200, damping: 20 }} className="relative mx-4 w-full max-w-sm overflow-hidden rounded-2xl border border-rose-200 bg-white shadow-2xl">
-            <div className="flex items-center gap-3 bg-gradient-to-r from-rose-600 to-pink-500 px-4 py-3 text-white">
-              <div className="rounded-xl bg-white/20 p-2"><Trash2 className="h-5 w-5"/></div>
-              <div className="text-sm font-semibold">{title}</div>
-            </div>
-            <div className="p-4 text-sm text-neutral-700">
-              {description && <p>{description}</p>}
-            </div>
-            <div className="flex items-center justify-end gap-2 bg-neutral-50 px-4 py-3">
-              <button onClick={onCancel} className="rounded-xl border border-neutral-300 bg-white px-3 py-2 text-sm hover:bg-neutral-100">{cancelText}</button>
-              <button onClick={onConfirm} className="rounded-xl bg-rose-600 px-3 py-2 text-sm text-white shadow hover:bg-rose-700">{confirmText}</button>
-            </div>
-          </motion.div>
-        </motion.div>
-      )}
-    </AnimatePresence>
-  );
-}
-          
-
-// ---------- Profile Page (Firebase Web SDK - Option 2) ----------
-// Uses Firebase Web SDK directly in the browser. No custom backend required.
-// Add your Firebase config in Vite env vars before running (see instructions below).
-
-import { initializeApp } from "firebase/app";
-import { getFirestore, doc, setDoc, getDoc, serverTimestamp } from "firebase/firestore";
-import { getStorage, ref as storageRef, uploadBytes, getDownloadURL } from "firebase/storage";
-
-const FIREBASE_CONFIG = {
-  apiKey: (import.meta as any).env?.VITE_FIREBASE_API_KEY || "",
-  authDomain: (import.meta as any).env?.VITE_FIREBASE_AUTH_DOMAIN || "",
-  projectId: (import.meta as any).env?.VITE_FIREBASE_PROJECT_ID || "",
-  storageBucket: (import.meta as any).env?.VITE_FIREBASE_STORAGE_BUCKET || "",
-  messagingSenderId: (import.meta as any).env?.VITE_FIREBASE_MESSAGING_SENDER_ID || "",
-  appId: (import.meta as any).env?.VITE_FIREBASE_APP_ID || "",
-};
-
-let _fbApp: any; let db: any; let storage: any;
-function ensureFirebase() {
-  if (!_fbApp) {
-    _fbApp = initializeApp(FIREBASE_CONFIG);
-    db = getFirestore(_fbApp);
-    storage = getStorage(_fbApp);
-  }
-  return { db, storage };
-}
-
-type Profile = {
-  name: string;
-  age?: number | "";
-  sex?: "Male" | "Female" | "Other" | "";
-  email?: string;
-  bloodGroup?: string;
-  maritalStatus?: "Single" | "Married" | "Other" | "";
-  occupation?: "Job" | "Business" | "Student" | "Other" | "";
-  photoUrl?: string;
-};
-
+// ============================
+// Profile Page (Firebase Web SDK)
+// ============================
 function ProfilePage() {
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -274,7 +303,7 @@ function ProfilePage() {
   const [error, setError] = useState<string | null>(null);
 
   const profileIdKey = "goal-challenge:profileId";
-  const [profileId, setProfileId] = useState<string>(() => {
+  const [profileId] = useState<string>(() => {
     const existing = localStorage.getItem(profileIdKey);
     if (existing) return existing;
     const id = uid();
@@ -287,9 +316,12 @@ function ProfilePage() {
       try {
         setLoading(true);
         const { db } = ensureFirebase();
+        console.log('db: ',db,'profileId: ',profileId)
         const snap = await getDoc(doc(db, "profiles", profileId));
+        console.log('snap: ',snap)
         if (snap.exists()) {
           const data = snap.data() as Profile;
+          console.log('data: ',data)
           setProfile({
             name: data.name || "",
             age: (data.age as number) ?? "",
@@ -409,7 +441,9 @@ function ProfilePage() {
   );
 }
 
-// ---------- Main App (with simple Tabs) ----------
+// ============================
+// Main App
+// ============================
 export default function GoalChallengeApp() {
   const [tab, setTab] = useState<"goals" | "profile">("goals");
   // Week handling
@@ -516,12 +550,46 @@ export default function GoalChallengeApp() {
     const next = [...categories]; next[catIdx] = { ...srcCat, goals: newGoals }; setCategories(next);
   };
   const togglePicked = (catId: string, goalId: string) => { if (isPast) return; setCategories(prev => prev.map(c => c.id !== catId ? c : ({ ...c, goals: c.goals.map(g => g.id !== goalId ? g : ({ ...g, picked: !g.picked })) }))); };
-  const toggleCompleted = (catId: string, goalId: string) => { if (isPast || isFuture) return; setCategories(prev => prev.map(c => c.id !== catId ? c : ({ ...c, goals: c.goals.map(g => g.id !== goalId ? g : ({ ...g, completed: !g.completed })) }))); };
+  const toggleCompleted = (catId: string, goalId: string) => {
+    // Past weeks: no edits; Future weeks: cannot complete
+    if (isPast || isFuture) return;
+
+    // Inspect current state to know if this action is marking as completed
+    const cat = categories.find(c => c.id === catId);
+    const goal = cat?.goals.find(g => g.id === goalId);
+    const willComplete = !!goal && !goal.completed; // only toast on transition -> completed
+    const goalTitle = goal?.title || "Goal";
+    const catName = cat?.name || "";
+
+    // Flip completion
+    setCategories(prev => prev.map(c => c.id !== catId ? c : ({
+      ...c,
+      goals: c.goals.map(g => g.id !== goalId ? g : ({ ...g, completed: !g.completed }))
+    })));
+
+    // Friendly toast for each completion
+    if (willComplete) {
+      setToast({ show: true, title: "Nice! Task completed", subtitle: catName ? `${goalTitle} — ${catName}` : goalTitle });
+    }
+  };
 
   const shiftWeek = (delta: number) => { const d = new Date(weekStart); d.setUTCDate(d.getUTCDate() + delta * 7); setWeekStart(d); };
   const weekLabel = useMemo(() => { const end = new Date(weekStart); end.setUTCDate(end.getUTCDate() + 6); const intl = new Intl.DateTimeFormat("en-GB", { month: "short", day: "2-digit" }); return `${intl.format(weekStart)} → ${intl.format(end)}`; }, [weekStart]);
 
   const modeInfo = isPast ? { text: "Past week — read only", color: "bg-neutral-800", icon: <Lock className="h-4 w-4" /> } : isFuture ? { text: "Future week — picking only (no completion)", color: "bg-indigo-600", icon: <CalendarClock className="h-4 w-4" /> } : { text: "Current week — full access", color: "bg-emerald-600", icon: <CheckCircle2 className="h-4 w-4 text-white" /> };
+
+  // -------- Dev self-tests (lightweight) --------
+  useEffect(() => {
+    // Basic sanity checks act like tiny "tests" in dev
+    try {
+      console.assert(DEFAULT_DATA.length === 6, "Expected 6 categories in DEFAULT_DATA");
+      const bad = DEFAULT_DATA.find(c => c.goals.length < 2);
+      if (bad) console.warn("Category has <2 goals:", bad.name);
+      // Week math sanity
+      const s = startOfWeekKolkata(new Date());
+      console.assert(s.getUTCDay() === 1 || s.getUTCDay() === 0 || s instanceof Date, "startOfWeekKolkata returns a Date");
+    } catch {}
+  }, []);
 
   return (
     <div className="min-h-screen bg-[radial-gradient(1200px_600px_at_10%_0%,#eef2ff_0%,transparent_60%),radial-gradient(1200px_600px_at_90%_100%,#ecfeff_0%,transparent_60%)] bg-slate-50 p-5">
@@ -675,22 +743,6 @@ export default function GoalChallengeApp() {
       />
 
       <Toast show={toast.show} title={toast.title} subtitle={toast.subtitle} onClose={() => setToast(s => ({ ...s, show: false }))} />
-    </div>
-  );
-}
-
-function MilestoneCard({ level, active, label, desc }: { level: "right" | "rocking" | "brilliant"; active: boolean; label: string; desc: string; }) {
-  const palette = level === "brilliant" ? "bg-gradient-to-tr from-emerald-500 to-lime-500" : level === "rocking" ? "bg-gradient-to-tr from-indigo-500 to-fuchsia-500" : "bg-gradient-to-tr from-amber-500 to-orange-500";
-  return (
-    <div className={`relative overflow-hidden rounded-3xl border border-neutral-200 p-4 shadow-sm ${active ? palette + " text-white" : "bg-white"}`}>
-      <div className="flex items-center gap-3">
-        <div className={`rounded-2xl ${active ? "bg-white/15" : "bg-neutral-100"} p-2`}>{active ? <CheckCircle2 className="h-5 w-5" /> : <CheckCircle2 className="h-5 w-5 text-neutral-400" />}</div>
-        <div>
-          <div className={`text-sm font-semibold ${active ? "" : "text-neutral-800"}`}>{label}</div>
-          <div className={`text-xs ${active ? "opacity-90" : "text-neutral-500"}`}>{desc}</div>
-        </div>
-      </div>
-      {active && (<motion.div initial={{ scale: 0 }} animate={{ scale: 1 }} transition={{ type: "spring", stiffness: 120, damping: 10 }} className="pointer-events-none absolute -right-8 -top-8 h-24 w-24 rounded-full bg-white/20" />)}
     </div>
   );
 }
