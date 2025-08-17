@@ -1,22 +1,38 @@
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import { doc, getDoc, getDocFromCache, serverTimestamp, setDoc, enableNetwork } from "firebase/firestore";
 import { getDownloadURL, ref as storageRef, uploadBytes } from "firebase/storage";
 import type { Profile } from "../lib/core";
 import { ensureFirebase } from "../lib/store";
 import { uid } from "../lib/core";
-import { getAuth, onAuthStateChanged } from "firebase/auth";
+import { getAuth, onAuthStateChanged, User } from "firebase/auth";
+
+function getProviderPhoto(u: User | null | undefined): string | null {
+  if (!u) return null;
+  if (u.photoURL) return u.photoURL;
+  const fromProvider = u.providerData?.find(p => !!p?.photoURL)?.photoURL;
+  return fromProvider || null;
+}
 
 export default function ProfilePage() {
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
   const [photoFile, setPhotoFile] = useState<File | null>(null);
-  const [preview, setPreview] = useState<string | null>(null);
+  const [preview, setPreview] = useState<string | null>(null); // what we actually display
   const [profile, setProfile] = useState<Profile>({ name: "", age: "", sex: "", email: "", bloodGroup: "", maritalStatus: "", occupation: "", photoUrl: "" });
   const [error, setError] = useState<string | null>(null);
   const [info, setInfo] = useState<string | null>(null);
 
-  const profileIdKey = "goal-challenge:profileId";
+  const { db, storage } = ensureFirebase();
   const auth = getAuth();
+  const [authUser, setAuthUser] = useState<User | null>(auth.currentUser);
+
+  useEffect(() => {
+    const unsub = onAuthStateChanged(auth, (u) => setAuthUser(u));
+    return () => unsub();
+  }, [auth]);
+
+  // pick profileId: prefer uid when signed in, else local anon id
+  const profileIdKey = "goal-challenge:profileId";
   const [profileId, setProfileId] = useState<string>(() => {
     const uidFromAuth = auth?.currentUser?.uid;
     if (uidFromAuth) return uidFromAuth;
@@ -26,90 +42,92 @@ export default function ProfilePage() {
     localStorage.setItem(profileIdKey, id);
     return id;
   });
-
   useEffect(() => {
-    const unsub = onAuthStateChanged(auth, (u) => {
-      if (u?.uid) setProfileId(u.uid);
-    });
-    return () => unsub();
-  }, []);
+    if (authUser?.uid) setProfileId(authUser.uid);
+  }, [authUser]);
 
+  // Load profile and compute preview with precedence: Uploaded (profile.photoUrl) > Provider photo > Placeholder
   useEffect(() => {
     (async () => {
       try {
         setLoading(true);
         setError(null); setInfo(null);
-        const { db } = ensureFirebase();
-        if (!db) { setError("Firebase not configured (missing env)." ); return; }
-
-        // Try to make sure Firestore network is enabled (handles cases where it was previously disabled)
-        try { await enableNetwork(db); } catch { /* ignore; it's enabled by default */ }
-
+        if (!db) { setError("Firebase not configured."); return; }
+        try { await enableNetwork(db); } catch { /* noop */ }
         const ref = doc(db, "profiles", profileId);
         let snap: any;
-        try {
-          snap = await getDoc(ref);
-        } catch (e: any) {
-          // Offline or network issue: try cache
+        try { snap = await getDoc(ref); } catch (e: any) {
           if (e?.code === "unavailable" || /offline/i.test(String(e?.message))) {
-            try {
-              snap = await getDocFromCache(ref);
-              setInfo("Loaded from local cache (offline).");
-            } catch {
-              throw e;
-            }
-          } else {
-            throw e;
-          }
+            try { snap = await getDocFromCache(ref); setInfo("Loaded from local cache (offline)."); } catch { /* ignore */ }
+          } else { throw e; }
         }
 
+        const providerPhoto = getProviderPhoto(authUser);
         if (snap && snap.exists()) {
           const data = snap.data() as Profile;
           setProfile({
             name: data.name || "",
             age: (data.age as number) ?? "",
             sex: (data.sex as any) ?? "",
-            email: data.email || "",
+            email: data.email || authUser?.email || "",
             bloodGroup: data.bloodGroup || "",
             maritalStatus: (data.maritalStatus as any) ?? "",
             occupation: (data.occupation as any) ?? "",
             photoUrl: data.photoUrl || "",
           });
-          if (data.photoUrl) setPreview(data.photoUrl);
+          const effective = (data.photoUrl && data.photoUrl.length > 0) ? data.photoUrl : (providerPhoto || null);
+          setPreview(effective);
         } else {
-          // no profile yet — keep defaults
+          setProfile(p => ({ ...p, email: authUser?.email || "" }));
+          setPreview(providerPhoto || null);
         }
       } catch (e: any) {
         console.error("Profile load error:", e);
         setError(e?.message || "Failed to load profile. Check Firebase config & connectivity.");
       } finally { setLoading(false); }
     })();
-  }, [profileId]);
+  }, [db, profileId, authUser]);
 
+  // When selecting a new file, always show it immediately
   const onFile = (f: File | null) => {
     setPhotoFile(f);
     if (f) {
       const url = URL.createObjectURL(f);
       setPreview(url);
-    } else { setPreview(null); }
+    } else {
+      // If user clears selection, fall back to stored photo or provider photo
+      const providerPhoto = getProviderPhoto(authUser);
+      const fallback = profile.photoUrl || providerPhoto || null;
+      setPreview(fallback);
+    }
   };
 
+  // Save: if user uploaded, upload & store that URL; otherwise, if no stored photoUrl, store provider photo (so future reloads don’t depend on provider).
   const save = async () => {
     setError(null); setInfo(null);
     if (!profile.name) { setError("Name is required"); return; }
     try {
       setSaving(true);
-      const { db, storage } = ensureFirebase();
-      if (!db) { setError("Firebase not configured (missing env)." ); return; }
+      if (!db) { setError("Firebase not configured." ); return; }
+
       let photoUrl = profile.photoUrl || "";
       if (photoFile && storage) {
         const blob = await photoFile.arrayBuffer();
         const ref = storageRef(storage, `profiles/${profileId}`);
         await uploadBytes(ref, new Blob([blob], { type: photoFile.type || "image/jpeg" }));
         photoUrl = await getDownloadURL(ref);
+      } else if (!photoUrl) {
+        // If no explicit upload, persist provider photo if available
+        const providerPhoto = getProviderPhoto(authUser);
+        if (providerPhoto) photoUrl = providerPhoto;
       }
+
       const payload: Profile = { ...profile, photoUrl };
       await setDoc(doc(db, "profiles", profileId), { ...payload, updatedAt: serverTimestamp() }, { merge: true });
+
+      // Update local state/preview with whatever we saved
+      setProfile(p => ({ ...p, photoUrl }));
+      setPreview(photoUrl || getProviderPhoto(authUser));
       setInfo("Profile saved.");
     } catch (e: any) {
       console.error(e);
@@ -179,12 +197,12 @@ export default function ProfilePage() {
       <div className="rounded-3xl border border-neutral-200 bg-white p-5 shadow-sm">
         <div className="mb-3 text-sm font-semibold">Profile Photo</div>
         {preview ? (
-          <img src={preview} alt="Preview" className="mb-3 aspect-square w-full rounded-2xl object-cover" />
+          <img src={preview} alt="Profile" className="mb-3 aspect-square w-full rounded-2xl object-cover" />
         ) : (
           <div className="mb-3 flex aspect-square w-full items-center justify-center rounded-2xl bg-neutral-100 text-xs text-neutral-500">No photo</div>
         )}
         <input type="file" accept="image/*" onChange={e => onFile(e.target.files?.[0] || null)} className="w-full text-sm" />
-        <p className="mt-2 text-xs text-neutral-500">Uploaded to Firebase Storage on save.</p>
+        <p className="mt-2 text-xs text-neutral-500">If you upload a photo, it overrides the sign-in provider picture. Otherwise your Google/GitHub/Facebook photo is shown.</p>
       </div>
     </div>
   );

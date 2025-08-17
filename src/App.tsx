@@ -45,6 +45,11 @@ export default function GoalChallengeApp() {
     return () => unsub();
   }, []);
 
+  // If user logs in while on Account tab, bounce back to Goals
+  useEffect(() => {
+    if (authUser && tab === "auth") setTab("goals");
+  }, [authUser, tab]);
+
   // Week handling
   const [weekStart, setWeekStart] = useState<Date>(() => startOfWeekKolkata());
   const weekStamp = useMemo(() => fmtDateUTCYYYYMMDD(weekStart), [weekStart]);
@@ -194,7 +199,9 @@ export default function GoalChallengeApp() {
           <div className="flex items-center gap-2 rounded-2xl border border-neutral-300 bg-white p-1 shadow-sm">
             <button onClick={() => setTab("goals") } className={`rounded-xl px-3 py-1.5 text-sm ${tab === "goals" ? "bg-black text-white" : "hover:bg-neutral-100"}`}>Goals</button>
             <button onClick={() => setTab("profile")} className={`rounded-xl px-3 py-1.5 text-sm ${tab === "profile" ? "bg-black text-white" : "hover:bg-neutral-100"}`}>Profile</button>
-            <button onClick={() => setTab("auth")} className={`rounded-xl px-3 py-1.5 text-sm ${tab === "auth" ? "bg-black text-white" : "hover:bg-neutral-100"}`}>Account</button>
+            {!authUser && (
+              <button onClick={() => setTab("auth")} className={`rounded-xl px-3 py-1.5 text-sm ${tab === "auth" ? "bg-black text-white" : "hover:bg-neutral-100"}`}>Account</button>
+            )}
           </div>
           <div className="flex items-center gap-2">
             {tab === "goals" && (
@@ -358,7 +365,7 @@ export default function GoalChallengeApp() {
       <ConfirmDialog
         open={confirmDel.open}
         title="Delete this goal?"
-        description={confirmDel.title ? `This will remove "${confirmDel.title}" from this week.` : undefined}
+        description={confirmDel.title ? `This will remove \"${confirmDel.title}\" from this week.` : undefined}
         confirmText="Delete"
         cancelText="Cancel"
         onConfirm={confirmDelete}
