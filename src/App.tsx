@@ -184,14 +184,57 @@ const FIREBASE_CONFIG = {
   appId: (import.meta as any).env?.VITE_FIREBASE_APP_ID || "",
 };
 
+const hasFirebaseConfig = () => !!(FIREBASE_CONFIG.apiKey && FIREBASE_CONFIG.projectId);
+
 let _fbApp: any; let db: any; let storage: any;
 function ensureFirebase() {
-  if (!_fbApp) {
-    _fbApp = initializeApp(FIREBASE_CONFIG);
-    db = getFirestore(_fbApp);
-    storage = getStorage(_fbApp);
+  if (!_fbApp && hasFirebaseConfig()) {
+    try {
+      _fbApp = initializeApp(FIREBASE_CONFIG);
+      db = getFirestore(_fbApp);
+      storage = getStorage(_fbApp);
+    } catch (e) {
+      console.warn("Firebase init failed", e);
+    }
   }
   return { db, storage };
+}
+
+// Helpers to clone default data (fresh ids, reset flags)
+function freshWeekTemplate(): Category[] {
+  return DEFAULT_DATA.map(c => ({ ...c, id: uid(), goals: c.goals.map(g => ({ ...g, id: uid(), picked: false, completed: false })) }));
+}
+
+async function loadWeekData(profileId: string, weekStamp: string): Promise<Category[]> {
+  const { db } = ensureFirebase();
+  if (db) {
+    try {
+      const snap = await getDoc(doc(db, "weeklyGoals", `${profileId}_${weekStamp}`));
+      if (snap.exists()) {
+        const data = snap.data() as any;
+        if (Array.isArray(data.categories)) return data.categories as Category[];
+      }
+    } catch (e) { console.warn("loadWeekData firestore", e); }
+  }
+  // Fallback to localStorage
+  const local = localStorage.getItem(`goal-challenge:${weekStamp}`);
+  if (local) { try { return JSON.parse(local) as Category[]; } catch {} }
+  return freshWeekTemplate();
+}
+
+async function saveWeekData(profileId: string, weekStamp: string, categories: Category[]) {
+  const { db } = ensureFirebase();
+  if (db) {
+    try {
+      await setDoc(
+        doc(db, "weeklyGoals", `${profileId}_${weekStamp}`),
+        { profileId, weekStamp, categories, updatedAt: serverTimestamp() },
+        { merge: true }
+      );
+    } catch (e) { console.warn("saveWeekData firestore", e); }
+  }
+  // Always also keep a local cache for offline/read speed
+  localStorage.setItem(`goal-challenge:${weekStamp}`, JSON.stringify(categories));
 }
 
 // ============================
@@ -316,23 +359,22 @@ function ProfilePage() {
       try {
         setLoading(true);
         const { db } = ensureFirebase();
-        console.log('db: ',db,'profileId: ',profileId)
-        const snap = await getDoc(doc(db, "profiles", profileId));
-        console.log('snap: ',snap)
-        if (snap.exists()) {
-          const data = snap.data() as Profile;
-          console.log('data: ',data)
-          setProfile({
-            name: data.name || "",
-            age: (data.age as number) ?? "",
-            sex: (data.sex as any) ?? "",
-            email: data.email || "",
-            bloodGroup: data.bloodGroup || "",
-            maritalStatus: (data.maritalStatus as any) ?? "",
-            occupation: (data.occupation as any) ?? "",
-            photoUrl: data.photoUrl || "",
-          });
-          if (data.photoUrl) setPreview(data.photoUrl);
+        if (db) {
+          const snap = await getDoc(doc(db, "profiles", profileId));
+          if (snap.exists()) {
+            const data = snap.data() as Profile;
+            setProfile({
+              name: data.name || "",
+              age: (data.age as number) ?? "",
+              sex: (data.sex as any) ?? "",
+              email: data.email || "",
+              bloodGroup: data.bloodGroup || "",
+              maritalStatus: (data.maritalStatus as any) ?? "",
+              occupation: (data.occupation as any) ?? "",
+              photoUrl: data.photoUrl || "",
+            });
+            if (data.photoUrl) setPreview(data.photoUrl);
+          }
         }
       } catch (e: any) {
         console.error(e);
@@ -356,14 +398,16 @@ function ProfilePage() {
       setSaving(true);
       const { db, storage } = ensureFirebase();
       let photoUrl = profile.photoUrl || "";
-      if (photoFile) {
+      if (photoFile && storage) {
         const blob = await photoFile.arrayBuffer();
         const ref = storageRef(storage, `profiles/${profileId}`);
         await uploadBytes(ref, new Blob([blob], { type: photoFile.type || "image/jpeg" }));
         photoUrl = await getDownloadURL(ref);
       }
-      const payload: Profile = { ...profile, photoUrl };
-      await setDoc(doc(db, "profiles", profileId), { ...payload, updatedAt: serverTimestamp() }, { merge: true });
+      if (db) {
+        const payload: Profile = { ...profile, photoUrl };
+        await setDoc(doc(db, "profiles", profileId), { ...payload, updatedAt: serverTimestamp() }, { merge: true });
+      }
     } catch (e: any) {
       console.error(e);
       setError("Failed to save. Verify Firebase config & rules.");
@@ -446,19 +490,29 @@ function ProfilePage() {
 // ============================
 export default function GoalChallengeApp() {
   const [tab, setTab] = useState<"goals" | "profile">("goals");
+
+  // Profile id (used to scope per-user weekly docs)
+  const profileIdKey = "goal-challenge:profileId";
+  const [profileId] = useState<string>(() => {
+    const ex = localStorage.getItem(profileIdKey);
+    if (ex) return ex;
+    const id = uid();
+    localStorage.setItem(profileIdKey, id);
+    return id;
+  });
+
   // Week handling
   const [weekStart, setWeekStart] = useState<Date>(() => startOfWeekKolkata());
-  const weekKey = useMemo(() => `goal-challenge:${fmtDateUTCYYYYMMDD(weekStart)}`, [weekStart]);
+  const weekStamp = useMemo(() => fmtDateUTCYYYYMMDD(weekStart), [weekStart]);
   const currentWeekStart = useMemo(() => startOfWeekKolkata(), []);
   const isPast = weekStart.getTime() < currentWeekStart.getTime();
   const isFuture = weekStart.getTime() > currentWeekStart.getTime();
 
-  // Data state (per-week persistence)
-  const [categories, setCategories] = useState<Category[]>(() => {
-    const saved = localStorage.getItem(`goal-challenge:${fmtDateUTCYYYYMMDD(startOfWeekKolkata())}`);
-    if (saved) { try { return JSON.parse(saved) as Category[]; } catch {} }
-    return DEFAULT_DATA;
-  });
+  // Week data state (per-week persistence) — start empty to avoid saving wrong week on first render
+  const [categories, setCategories] = useState<Category[]>([]);
+  const [loadingWeek, setLoadingWeek] = useState(true);
+  const hydratingRef = useRef(false);
+  const saveTimer = useRef<number | undefined>();
 
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 6 } }));
 
@@ -511,16 +565,34 @@ export default function GoalChallengeApp() {
     })));
   };
 
-  // Persist per-week
-  useEffect(() => { localStorage.setItem(weekKey, JSON.stringify(categories)); }, [categories, weekKey]);
-
-  // Load selected week
+  // Load week from storage/Firestore whenever week changes
   useEffect(() => {
-    const saved = localStorage.getItem(weekKey);
-    if (saved) { try { setCategories(JSON.parse(saved)); return; } catch {} }
-    const fresh = DEFAULT_DATA.map(c => ({ ...c, id: uid(), goals: c.goals.map(g => ({ ...g, id: uid(), picked: false, completed: false })) }));
-    setCategories(fresh);
-  }, [weekKey]);
+    let alive = true;
+    (async () => {
+      hydratingRef.current = true;
+      setLoadingWeek(true);
+      try {
+        const data = await loadWeekData(profileId, weekStamp);
+        if (!alive) return;
+        setCategories(data);
+      } finally {
+        hydratingRef.current = false;
+        setLoadingWeek(false);
+      }
+    })();
+    return () => { alive = false; };
+  }, [profileId, weekStamp]);
+
+  // Save week to storage/Firestore when categories change (but not while hydrating)
+  useEffect(() => {
+    if (hydratingRef.current) return;
+    // Debounce saves to reduce writes when dragging/toggling fast
+    if (saveTimer.current) window.clearTimeout(saveTimer.current);
+    saveTimer.current = window.setTimeout(() => {
+      saveWeekData(profileId, weekStamp, categories);
+    }, 300);
+    return () => { if (saveTimer.current) window.clearTimeout(saveTimer.current); };
+  }, [categories, profileId, weekStamp]);
 
   // Stats & Milestones
   const achievedPerCategory = categories.map(c => c.goals.filter(g => g.completed).length >= 2);
@@ -597,7 +669,7 @@ export default function GoalChallengeApp() {
         {/* Top Nav */}
         <div className="mb-4 flex items-center justify-between">
           <div className="flex items-center gap-2 rounded-2xl border border-neutral-300 bg-white p-1 shadow-sm">
-            <button onClick={() => setTab("goals")} className={`rounded-xl px-3 py-1.5 text-sm ${tab === "goals" ? "bg-black text-white" : "hover:bg-neutral-100"}`}>Goals</button>
+            <button onClick={() => setTab("goals") } className={`rounded-xl px-3 py-1.5 text-sm ${tab === "goals" ? "bg-black text-white" : "hover:bg-neutral-100"}`}>Goals</button>
             <button onClick={() => setTab("profile")} className={`rounded-xl px-3 py-1.5 text-sm ${tab === "profile" ? "bg-black text-white" : "hover:bg-neutral-100"}`}>Profile</button>
           </div>
           {tab === "goals" && (
@@ -665,70 +737,78 @@ export default function GoalChallengeApp() {
             </div>
 
             {/* Columns */}
-            <DndContext sensors={sensors} onDragEnd={onDragEnd}>
-              <div className="mt-6 grid grid-cols-1 gap-5 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-3">
-                {categories.map(cat => {
-                  const pal = paletteFor(cat.name);
-                  return (
-                    <div key={cat.id} className={`rounded-3xl border ${pal.border} ${pal.col} p-4 shadow-md`}>
-                      <div className="mb-3 flex items-center justify-between">
-                        <h2 className={`text-lg font-semibold tracking-tight ${pal.heading}`}>{cat.name}</h2>
-                        <span className={`text-xs inline-flex items-center gap-2 rounded-full px-2 py-1 ${pal.chip}`}>
-                          {cat.goals.filter(g => g.completed).length}/2 completed
-                        </span>
-                      </div>
-                      <SortableContext items={cat.goals.map(g => g.id)} strategy={verticalListSortingStrategy}>
-                        <div className="flex flex-col gap-3">
-                          {cat.goals.map(goal => (
-                            <SortableGoal
-                              key={goal.id}
-                              goal={goal}
-                              disabledDrag={isPast}
-                              disabledPick={isPast}
-                              disabledComplete={isPast || isFuture}
-                              onTogglePicked={() => togglePicked(cat.id, goal.id)}
-                              onToggleCompleted={() => toggleCompleted(cat.id, goal.id)}
-                              onRename={(newTitle) => renameGoal(cat.id, goal.id, newTitle)}
-                              onDuplicate={() => duplicateGoal(cat.id, goal.id)}
-                              onDelete={() => requestDelete(cat.id, goal.id, goal.title)}
-                              disabledRename={isPast}
-                              disabledManage={isPast}
-                            />
-                          ))}
-                        </div>
-                      </SortableContext>
-
-                      {/* Add new goal */}
-                      <div className="mt-3 flex items-center gap-2">
-                        <input
-                          value={newGoalText[cat.id] || ''}
-                          onChange={(e) => setNewGoalText(prev => ({ ...prev, [cat.id]: e.target.value }))}
-                          onKeyDown={(e) => { if (e.key === 'Enter') { addGoal(cat.id, (newGoalText[cat.id] || '').trim()); } }}
-                          placeholder="Add a new goal"
-                          disabled={isPast}
-                          className={`flex-1 rounded-xl border border-neutral-300 bg-white px-3 py-2 text-sm ${isPast ? 'opacity-50' : ''}`}
-                        />
-                        <button
-                          onClick={() => addGoal(cat.id, (newGoalText[cat.id] || '').trim())}
-                          disabled={isPast}
-                          className={`inline-flex items-center gap-1 rounded-xl bg-black px-3 py-2 text-xs text-white shadow-sm ${isPast ? 'opacity-50 cursor-not-allowed' : 'hover:bg-neutral-800'}`}
-                          title={isPast ? 'Cannot add goals in past weeks' : 'Add goal'}
-                        >
-                          <Plus className="h-4 w-4" /> Add
-                        </button>
-                      </div>
-                    </div>
-                  );
-                })}
+            {loadingWeek ? (
+              <div className="mt-8 grid grid-cols-1 gap-5 md:grid-cols-2 lg:grid-cols-3">
+                {[...Array(6)].map((_, i) => (
+                  <div key={i} className="h-56 animate-pulse rounded-3xl border border-neutral-200 bg-white/60" />
+                ))}
               </div>
-            </DndContext>
+            ) : (
+              <DndContext sensors={sensors} onDragEnd={onDragEnd}>
+                <div className="mt-6 grid grid-cols-1 gap-5 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-3">
+                  {categories.map(cat => {
+                    const pal = paletteFor(cat.name);
+                    return (
+                      <div key={cat.id} className={`rounded-3xl border ${pal.border} ${pal.col} p-4 shadow-md`}>
+                        <div className="mb-3 flex items-center justify-between">
+                          <h2 className={`text-lg font-semibold tracking-tight ${pal.heading}`}>{cat.name}</h2>
+                          <span className={`text-xs inline-flex items-center gap-2 rounded-full px-2 py-1 ${pal.chip}`}>
+                            {cat.goals.filter(g => g.completed).length}/2 completed
+                          </span>
+                        </div>
+                        <SortableContext items={cat.goals.map(g => g.id)} strategy={verticalListSortingStrategy}>
+                          <div className="flex flex-col gap-3">
+                            {cat.goals.map(goal => (
+                              <SortableGoal
+                                key={goal.id}
+                                goal={goal}
+                                disabledDrag={isPast}
+                                disabledPick={isPast}
+                                disabledComplete={isPast || isFuture}
+                                onTogglePicked={() => togglePicked(cat.id, goal.id)}
+                                onToggleCompleted={() => toggleCompleted(cat.id, goal.id)}
+                                onRename={(newTitle) => renameGoal(cat.id, goal.id, newTitle)}
+                                onDuplicate={() => duplicateGoal(cat.id, goal.id)}
+                                onDelete={() => requestDelete(cat.id, goal.id, goal.title)}
+                                disabledRename={isPast}
+                                disabledManage={isPast}
+                              />
+                            ))}
+                          </div>
+                        </SortableContext>
+
+                        {/* Add new goal */}
+                        <div className="mt-3 flex items-center gap-2">
+                          <input
+                            value={newGoalText[cat.id] || ''}
+                            onChange={(e) => setNewGoalText(prev => ({ ...prev, [cat.id]: e.target.value }))}
+                            onKeyDown={(e) => { if (e.key === 'Enter') { addGoal(cat.id, (newGoalText[cat.id] || '').trim()); } }}
+                            placeholder="Add a new goal"
+                            disabled={isPast}
+                            className={`flex-1 rounded-xl border border-neutral-300 bg-white px-3 py-2 text-sm ${isPast ? 'opacity-50' : ''}`}
+                          />
+                          <button
+                            onClick={() => addGoal(cat.id, (newGoalText[cat.id] || '').trim())}
+                            disabled={isPast}
+                            className={`inline-flex items-center gap-1 rounded-xl bg-black px-3 py-2 text-xs text-white shadow-sm ${isPast ? 'opacity-50 cursor-not-allowed' : 'hover:bg-neutral-800'}`}
+                            title={isPast ? 'Cannot add goals in past weeks' : 'Add goal'}
+                          >
+                            <Plus className="h-4 w-4" /> Add
+                          </button>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </DndContext>
+            )}
           </>
         ) : (
           <ProfilePage />
         )}
 
         <div className="mt-10 text-center text-xs text-neutral-500">
-          Week starts on <span className="font-medium">Monday</span>. Your progress is saved per week locally in your browser.
+          Week starts on <span className="font-medium">Monday</span>. Your progress is saved per week — in the cloud when Firebase is configured, otherwise locally on this device.
         </div>
       </div>
 
