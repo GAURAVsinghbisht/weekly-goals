@@ -20,7 +20,8 @@ export default function AuthPage({ onSignedIn }: { onSignedIn?: () => void }) {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const { db, auth, providers } = ensureFirebase();
+const { db } = ensureFirebase(); // initialize the Firebase app + Firestore
+const auth = getAuth();          // get the Auth instance separately
 
   const afterAuth = async (user: any, fallbackName?: string) => {
     if (!db || !user) return;
