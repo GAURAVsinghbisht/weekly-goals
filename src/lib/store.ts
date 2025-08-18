@@ -1,52 +1,62 @@
 import { initializeApp, getApps, getApp } from "firebase/app";
-import { getFirestore, initializeFirestore } from "firebase/firestore";
+import { getFirestore, initializeFirestore, doc, setDoc, getDoc, serverTimestamp } from "firebase/firestore";
 import { getStorage } from "firebase/storage";
 import { getAuth } from "firebase/auth";
 import type { Category } from "../lib/core";
 import { DEFAULT_DATA, uid } from "../lib/core";
-// NOTE: Firestore helpers are still imported directly where used to avoid circular deps
-import { doc, setDoc, getDoc, serverTimestamp } from "firebase/firestore";
-// ---- Config ----
-const FIREBASE_CONFIG = {
+
+// Inline fallback (yours) — keep your bucket as provided
+const HARDCODED = {
   apiKey: "AIzaSyCi96DII_BSsZfn8FsdGkjTcUbYrwd_Yf4",
-  authDomain:  "week-gaols.firebaseapp.com",
+  authDomain: "week-gaols.firebaseapp.com",
   projectId: "week-gaols",
-  storageBucket: "week-gaols.firebasestorage.app",
+  storageBucket: "week-gaols.firebasestorage.app", // keep as you confirmed
   messagingSenderId: "213614122894",
   appId: "1:213614122894:web:aa7c849086047a24ebb6df",
 };
 
+// Prefer env when available, else fallback to inline
+const FIREBASE_CONFIG = {
+  apiKey:  HARDCODED.apiKey,
+  authDomain:  HARDCODED.authDomain,
+  projectId:  HARDCODED.projectId,
+  storageBucket: HARDCODED.storageBucket,
+  messagingSenderId:  HARDCODED.messagingSenderId,
+  appId: HARDCODED.appId,
+};
+
 const hasFirebaseConfig = () => !!(FIREBASE_CONFIG.apiKey && FIREBASE_CONFIG.projectId);
 
-let _app: ReturnType<typeof initializeApp> | undefined;
-let _db: ReturnType<typeof getFirestore> | undefined;
-let _storage: ReturnType<typeof getStorage> | undefined;
-let _auth: ReturnType<typeof getAuth> | undefined;
+// Keep singletons across HMR
+let cached: { app: any; db: any; storage: any; auth: any } | undefined;
 
 export function ensureFirebase() {
-  // Make it HMR-safe and avoid double-initting Firestore with different settings
-  const g = globalThis as any;
-  if (!g.__GOAL_CHALLENGE_FB__) {
-    const app = getApps().length ? getApp() : initializeApp(FIREBASE_CONFIG);
-    let db;
-    try {
-      // Only the first time we try to set custom settings; if already initialized, fall back
-      db = initializeFirestore(app, { experimentalForceLongPolling: true, useFetchStreams: false });
-    } catch {
-      db = getFirestore(app);
-    }
-    const storage = getStorage(app);
-    const auth = getAuth(app);
-    g.__GOAL_CHALLENGE_FB__ = { app, db, storage, auth };
+  if (cached) return cached;
+  if (!hasFirebaseConfig()) return { app: undefined, db: undefined, storage: undefined, auth: undefined };
+
+  const app = getApps().length ? getApp() : initializeApp(FIREBASE_CONFIG);
+
+  // Initialize Firestore reliably (avoid watch/stream issues across HMR)
+  let db: any;
+  try {
+    db = initializeFirestore(app, { experimentalForceLongPolling: true, useFetchStreams: false });
+  } catch {
+    db = getFirestore(app);
   }
-  return g.__GOAL_CHALLENGE_FB__ as { app: ReturnType<typeof getApp>, db: ReturnType<typeof getFirestore>, storage: ReturnType<typeof getStorage>, auth: ReturnType<typeof getAuth> };
+  const storage = getStorage(app);
+  const auth = getAuth(app);
+
+  cached = { app, db, storage, auth };
+  return cached;
 }
 
 export function freshWeekTemplate(): Category[] {
-  return DEFAULT_DATA.map(c => ({ ...c, id: uid(), goals: c.goals.map(g => ({ ...g, id: uid(), picked: false, completed: false })) }));
+  return DEFAULT_DATA.map(c => ({
+    ...c,
+    id: uid(),
+    goals: c.goals.map(g => ({ ...g, id: uid(), picked: false, completed: false })),
+  }));
 }
-
-
 
 export async function loadWeekData(profileId: string, weekStamp: string): Promise<Category[]> {
   const { db } = ensureFirebase();

@@ -1,5 +1,5 @@
-import React, { useEffect, useMemo, useState } from "react";
-import { doc, getDoc, getDocFromCache, serverTimestamp, setDoc, enableNetwork } from "firebase/firestore";
+import React, { useEffect, useState } from "react";
+import { doc, getDocFromCache, getDocFromServer, serverTimestamp, setDoc } from "firebase/firestore";
 import { getDownloadURL, ref as storageRef, uploadBytes } from "firebase/storage";
 import type { Profile } from "../lib/core";
 import { ensureFirebase } from "../lib/store";
@@ -17,8 +17,9 @@ export default function ProfilePage() {
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
   const [photoFile, setPhotoFile] = useState<File | null>(null);
-  const [preview, setPreview] = useState<string | null>(null); // what we actually display
+  const [preview, setPreview] = useState<string | null>(null);
   const [profile, setProfile] = useState<Profile>({ name: "", age: "", sex: "", email: "", bloodGroup: "", maritalStatus: "", occupation: "", photoUrl: "" });
+  // keep internal error if needed (never shown in UI)
   const [error, setError] = useState<string | null>(null);
   const [info, setInfo] = useState<string | null>(null);
 
@@ -31,7 +32,7 @@ export default function ProfilePage() {
     return () => unsub();
   }, [auth]);
 
-  // pick profileId: prefer uid when signed in, else local anon id
+  // Choose profile id: prefer signed-in uid, else durable local id
   const profileIdKey = "goal-challenge:profileId";
   const [profileId, setProfileId] = useState<string>(() => {
     const uidFromAuth = auth?.currentUser?.uid;
@@ -42,24 +43,23 @@ export default function ProfilePage() {
     localStorage.setItem(profileIdKey, id);
     return id;
   });
-  useEffect(() => {
-    if (authUser?.uid) setProfileId(authUser.uid);
-  }, [authUser]);
+  useEffect(() => { if (authUser?.uid) setProfileId(authUser.uid); }, [authUser]);
 
-  // Load profile and compute preview with precedence: Uploaded (profile.photoUrl) > Provider photo > Placeholder
+  // Load profile: try server first, then cache; set preview from stored photo or provider
   useEffect(() => {
     (async () => {
       try {
         setLoading(true);
         setError(null); setInfo(null);
-        if (!db) { setError("Firebase not configured."); return; }
-        try { await enableNetwork(db); } catch { /* noop */ }
+        if (!db) return;
         const ref = doc(db, "profiles", profileId);
-        let snap: any;
-        try { snap = await getDoc(ref); } catch (e: any) {
-          if (e?.code === "unavailable" || /offline/i.test(String(e?.message))) {
-            try { snap = await getDocFromCache(ref); setInfo("Loaded from local cache (offline)."); } catch { /* ignore */ }
-          } else { throw e; }
+        let snap: any = null;
+        try { snap = await getDocFromServer(ref); } catch (e: any) {
+          if (e?.code === "unavailable" || /offline|network|failed to fetch/i.test(String(e?.message))) {
+            try { snap = await getDocFromCache(ref); } catch { /* ignore */ }
+          } else {
+            setError(String(e?.message || e));
+          }
         }
 
         const providerPhoto = getProviderPhoto(authUser);
@@ -75,41 +75,38 @@ export default function ProfilePage() {
             occupation: (data.occupation as any) ?? "",
             photoUrl: data.photoUrl || "",
           });
-          const effective = (data.photoUrl && data.photoUrl.length > 0) ? data.photoUrl : (providerPhoto || null);
-          setPreview(effective);
+          setPreview((data.photoUrl && data.photoUrl.length > 0) ? data.photoUrl : (providerPhoto || null));
         } else {
           setProfile(p => ({ ...p, email: authUser?.email || "" }));
           setPreview(providerPhoto || null);
         }
       } catch (e: any) {
         console.error("Profile load error:", e);
-        setError(e?.message || "Failed to load profile. Check Firebase config & connectivity.");
+        setError(e?.message || String(e));
       } finally { setLoading(false); }
     })();
   }, [db, profileId, authUser]);
 
-  // When selecting a new file, always show it immediately
+  // File picker: show chosen file immediately; if cleared, fall back to stored photo or provider photo
   const onFile = (f: File | null) => {
     setPhotoFile(f);
     if (f) {
       const url = URL.createObjectURL(f);
       setPreview(url);
     } else {
-      // If user clears selection, fall back to stored photo or provider photo
       const providerPhoto = getProviderPhoto(authUser);
       const fallback = profile.photoUrl || providerPhoto || null;
       setPreview(fallback);
     }
   };
 
-  // Save: if user uploaded, upload & store that URL; otherwise, if no stored photoUrl, store provider photo (so future reloads don’t depend on provider).
+  // Save: upload file if any; otherwise persist provider photo for future reloads
   const save = async () => {
-    setError(null); setInfo(null);
-    if (!profile.name) { setError("Name is required"); return; }
+    setInfo(null);
+    if (!profile.name) { return; }
     try {
       setSaving(true);
-      if (!db) { setError("Firebase not configured." ); return; }
-
+      if (!db) return;
       let photoUrl = profile.photoUrl || "";
       if (photoFile && storage) {
         const blob = await photoFile.arrayBuffer();
@@ -117,22 +114,16 @@ export default function ProfilePage() {
         await uploadBytes(ref, new Blob([blob], { type: photoFile.type || "image/jpeg" }));
         photoUrl = await getDownloadURL(ref);
       } else if (!photoUrl) {
-        // If no explicit upload, persist provider photo if available
         const providerPhoto = getProviderPhoto(authUser);
         if (providerPhoto) photoUrl = providerPhoto;
       }
-
       const payload: Profile = { ...profile, photoUrl };
-      await setDoc(doc(db, "profiles", profileId), { ...payload, updatedAt: serverTimestamp() }, { merge: true });
-
-      // Update local state/preview with whatever we saved
+      await setDoc(doc(db!, "profiles", profileId), { ...payload, updatedAt: serverTimestamp() }, { merge: true });
       setProfile(p => ({ ...p, photoUrl }));
       setPreview(photoUrl || getProviderPhoto(authUser));
       setInfo("Profile saved.");
     } catch (e: any) {
-      console.error(e);
-      setError(e?.message || "Failed to save. Verify Firebase config, rules & network.");
-      return;
+      console.error("Profile save error:", e);
     } finally { setSaving(false); }
   };
 
@@ -144,8 +135,7 @@ export default function ProfilePage() {
           <span className="text-xs text-neutral-500">Profile ID: <span className="font-mono">{profileId}</span></span>
         </div>
 
-        {error && <div className="mb-3 rounded-xl bg-rose-50 p-3 text-sm text-rose-700">{error}</div>}
-        {info && !error && <div className="mb-3 rounded-xl bg-emerald-50 p-3 text-sm text-emerald-700">{info}</div>}
+        {info && <div className="mb-3 rounded-xl bg-emerald-50 p-3 text-sm text-emerald-700">{info}</div>}
 
         {loading ? <div className="text-sm text-neutral-500">Loading…</div> : (
           <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
@@ -202,7 +192,7 @@ export default function ProfilePage() {
           <div className="mb-3 flex aspect-square w-full items-center justify-center rounded-2xl bg-neutral-100 text-xs text-neutral-500">No photo</div>
         )}
         <input type="file" accept="image/*" onChange={e => onFile(e.target.files?.[0] || null)} className="w-full text-sm" />
-        <p className="mt-2 text-xs text-neutral-500">If you upload a photo, it overrides the sign-in provider picture. Otherwise your Google/GitHub/Facebook photo is shown.</p>
+        <p className="mt-2 text-xs text-neutral-500">Upload a photo to override your Google/GitHub/Facebook one; otherwise your sign-in photo is shown.</p>
       </div>
     </div>
   );

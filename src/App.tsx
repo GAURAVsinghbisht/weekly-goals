@@ -48,6 +48,7 @@ export default function GoalChallengeApp() {
   // If user logs in while on Account tab, bounce back to Goals
   useEffect(() => {
     if (authUser && tab === "auth") setTab("goals");
+    
   }, [authUser, tab]);
 
   // Week handling
@@ -140,7 +141,10 @@ export default function GoalChallengeApp() {
       saveWeekData(profileId, weekStamp, categories);
     }, 300);
     return () => { if (saveTimer.current) window.clearTimeout(saveTimer.current); };
+    
   }, [categories, profileId, weekStamp]);
+
+ 
 
   // Stats & Milestones
   const achievedPerCategory = categories.map(c => c.goals.filter(g => g.completed).length >= 2);
@@ -215,10 +219,15 @@ export default function GoalChallengeApp() {
               </>
             )}
             {authUser ? (
-              <div className="ml-3 flex items-center gap-2 rounded-xl border border-neutral-300 bg-white px-3 py-1.5 text-xs shadow-sm">
-                <span className="max-w-[180px] truncate">{authUser.displayName || authUser.email}</span>
-                <button onClick={() => signOut(getAuth())} className="rounded-lg px-2 py-1 hover:bg-neutral-100">Sign out</button>
-              </div>
+              <button
+  onClick={async () => {
+    await signOut(getAuth());
+    setTab("goals");           // ← go home after signing out
+  }}
+  className="rounded-lg px-2 py-1 hover:bg-neutral-100"
+>
+  Sign out
+</button>
             ) : (
               <button onClick={() => setTab("auth")} className="ml-2 rounded-xl border border-neutral-300 bg-white px-3 py-1.5 text-xs shadow-sm hover:bg-neutral-50">Sign in</button>
             )}
