@@ -1,13 +1,16 @@
-import { initializeApp } from "firebase/app";
+import { initializeApp, getApps, getApp } from "firebase/app";
 import {
+  // init
   getFirestore,
-  doc,
-  setDoc,
-  getDoc,
-  serverTimestamp,
-} from "firebase/firestore";
+  initializeFirestore,
 
-import {
+  // CRUD
+  doc,
+  getDoc,
+  setDoc,
+  serverTimestamp,
+
+  // Query APIs
   addDoc,
   collection,
   getDocs,
@@ -15,14 +18,18 @@ import {
   where,
   orderBy,
   limit,
+
+  // Aliased duplicates used elsewhere in your file
   doc as fdoc,
   getDoc as fgetDoc,
   setDoc as fsetDoc,
   serverTimestamp as fServerTimestamp,
 } from "firebase/firestore";
+
 import { getStorage } from "firebase/storage";
 import type { Category } from "../lib/core";
 import { DEFAULT_DATA, uid } from "../lib/core";
+import { getAuth } from "firebase/auth";
 
 const FIREBASE_CONFIG = {
   apiKey: "AIzaSyCi96DII_BSsZfn8FsdGkjTcUbYrwd_Yf4",
@@ -39,16 +46,23 @@ let _fbApp: any;
 let db: any;
 let storage: any;
 export function ensureFirebase() {
-  if (!_fbApp && hasFirebaseConfig()) {
-    try {
-      _fbApp = initializeApp(FIREBASE_CONFIG);
-      db = getFirestore(_fbApp);
-      storage = getStorage(_fbApp);
-    } catch (e) {
-      console.warn("Firebase init failed", e);
-    }
+  const g = globalThis as any;
+  if (g.__GOAL_CHALLENGE_FB__) return g.__GOAL_CHALLENGE_FB__;
+
+  const app = getApps().length ? getApp() : initializeApp(FIREBASE_CONFIG);
+
+  let db;
+  try {
+    db = initializeFirestore(app, { experimentalForceLongPolling: true });
+  } catch {
+    db = getFirestore(app);
   }
-  return { db, storage };
+
+  const storage = getStorage(app);
+  const auth = getAuth(app);
+
+  g.__GOAL_CHALLENGE_FB__ = { app, db, storage, auth };
+  return g.__GOAL_CHALLENGE_FB__;
 }
 
 export function freshWeekTemplate(): Category[] {
@@ -69,27 +83,27 @@ export async function loadWeekData(
   weekStamp: string
 ): Promise<Category[]> {
   const { db } = ensureFirebase();
-  if (db) {
-    try {
-      const snap = await getDoc(
-        doc(db, "weeklyGoals", `${profileId}_${weekStamp}`)
-      );
-      if (snap.exists()) {
-        const data = snap.data() as any;
-        if (Array.isArray(data.categories))
-          return data.categories as Category[];
-      }
-    } catch (e) {
-      console.warn("loadWeekData firestore", e);
+  if (!db) return freshWeekTemplate();
+
+  try {
+    const ref = doc(db, "weeklyGoals", `${profileId}_${weekStamp}`);
+    const snap = await getDoc(ref);
+    if (snap.exists()) {
+      const data = snap.data() as any;
+      if (Array.isArray(data.categories)) return data.categories as Category[];
     }
+    // Seed Firestore the first time this week is opened
+    const fresh = freshWeekTemplate();
+    await setDoc(
+      ref,
+      { profileId, weekStamp, categories: fresh, updatedAt: serverTimestamp() },
+      { merge: true }
+    );
+    return fresh;
+  } catch (e) {
+    console.warn("loadWeekData firestore", e);
+    return freshWeekTemplate();
   }
-  const local = localStorage.getItem(`goal-challenge:${weekStamp}`);
-  if (local) {
-    try {
-      return JSON.parse(local) as Category[];
-    } catch {}
-  }
-  return freshWeekTemplate();
 }
 
 export async function saveWeekData(
@@ -98,21 +112,53 @@ export async function saveWeekData(
   categories: Category[]
 ) {
   const { db } = ensureFirebase();
-  if (db) {
+  if (!db) return;
+  try {
+    await setDoc(
+      doc(db, "weeklyGoals", `${profileId}_${weekStamp}`),
+      { profileId, weekStamp, categories, updatedAt: serverTimestamp() },
+      { merge: true }
+    );
+  } catch (e) {
+    console.warn("saveWeekData firestore", e);
+  }
+}
+
+export async function migrateLocalWeeks(profileId: string) {
+  const { db } = ensureFirebase();
+  if (!db || !profileId) return;
+
+  const flagKey = `goal-challenge:migrated:${profileId}`;
+  if (localStorage.getItem(flagKey) === "1") return;
+
+  const prefix = "goal-challenge:";
+  const keys = Object.keys(localStorage).filter(
+    (k) =>
+      k.startsWith(prefix) && /^\d{4}-\d{2}-\d{2}$/.test(k.slice(prefix.length))
+  );
+
+  for (const k of keys) {
+    const weekStamp = k.slice(prefix.length);
     try {
-      await setDoc(
-        doc(db, "weeklyGoals", `${profileId}_${weekStamp}`),
-        { profileId, weekStamp, categories, updatedAt: serverTimestamp() },
-        { merge: true }
-      );
+      const raw = localStorage.getItem(k);
+      if (!raw) continue;
+      const categories = JSON.parse(raw) as Category[];
+      const ref = doc(db, "weeklyGoals", `${profileId}_${weekStamp}`);
+      const exists = (await getDoc(ref)).exists();
+      if (!exists) {
+        await setDoc(
+          ref,
+          { profileId, weekStamp, categories, updatedAt: serverTimestamp() },
+          { merge: true }
+        );
+      }
+      localStorage.removeItem(k);
     } catch (e) {
-      console.warn("saveWeekData firestore", e);
+      console.warn("migrateLocalWeeks error for", k, e);
     }
   }
-  localStorage.setItem(
-    `goal-challenge:${weekStamp}`,
-    JSON.stringify(categories)
-  );
+
+  localStorage.setItem(flagKey, "1");
 }
 
 // ===== Weekly AI Report persistence (Firestore) =====
@@ -134,31 +180,36 @@ export type SavedWeeklyReport = {
   updatedAt?: any;
 };
 
-
-
 /** Save a new version and upsert the latest snapshot */
-export async function saveWeeklyReport(profileId: string, weekStamp: string, report: string, metrics: WeeklyMetricsLite): Promise<void> {
+export async function saveWeeklyReport(
+  profileId: string,
+  weekStamp: string,
+  report: string,
+  metrics: WeeklyMetricsLite
+): Promise<void> {
   const { db } = ensureFirebase();
   if (!db) return;
   // history collection with auto id
   await addDoc(collection(db, "weeklyReports"), {
-  profileId,
-  weekStamp,
-  report,
-  metrics,
-  createdAt: fServerTimestamp(),
+    profileId,
+    weekStamp,
+    report,
+    metrics,
+    createdAt: fServerTimestamp(),
   });
   // latest doc for quick fetch
   await fsetDoc(
-  fdoc(db, "weeklyReportsLatest", `${profileId}_${weekStamp}`),
-  { profileId, weekStamp, report, metrics, updatedAt: fServerTimestamp() },
-  { merge: true }
+    fdoc(db, "weeklyReportsLatest", `${profileId}_${weekStamp}`),
+    { profileId, weekStamp, report, metrics, updatedAt: fServerTimestamp() },
+    { merge: true }
   );
-  }
-  
-  
-  /** Load the latest report snapshot for a given user+week */
-  export async function loadWeeklyReportLatest(profileId: string, weekStamp: string): Promise<SavedWeeklyReport | null> {
+}
+
+/** Load the latest report snapshot for a given user+week */
+export async function loadWeeklyReportLatest(
+  profileId: string,
+  weekStamp: string
+): Promise<SavedWeeklyReport | null> {
   const { db } = ensureFirebase();
   if (!db) return null;
   const ref = fdoc(db, "weeklyReportsLatest", `${profileId}_${weekStamp}`);
@@ -166,20 +217,23 @@ export async function saveWeeklyReport(profileId: string, weekStamp: string, rep
   if (!snap.exists()) return null;
   const data = snap.data() as SavedWeeklyReport;
   return { ...data };
-  }
-  
-  
-  /** Optional: fetch recent history (newest first) */
-  export async function loadWeeklyReportHistory(profileId: string, weekStamp: string, max = 5): Promise<SavedWeeklyReport[]> {
+}
+
+/** Optional: fetch recent history (newest first) */
+export async function loadWeeklyReportHistory(
+  profileId: string,
+  weekStamp: string,
+  max = 5
+): Promise<SavedWeeklyReport[]> {
   const { db } = ensureFirebase();
   if (!db) return [];
   const q = query(
-  collection(db, "weeklyReports"),
-  where("profileId", "==", profileId),
-  where("weekStamp", "==", weekStamp),
-  orderBy("createdAt", "desc"),
-  limit(max)
+    collection(db, "weeklyReports"),
+    where("profileId", "==", profileId),
+    where("weekStamp", "==", weekStamp),
+    orderBy("createdAt", "desc"),
+    limit(max)
   );
   const s = await getDocs(q);
-  return s.docs.map(d => ({ id: d.id, ...(d.data() as any) }));
-  }
+  return s.docs.map((d) => ({ id: d.id, ...(d.data() as any) }));
+}

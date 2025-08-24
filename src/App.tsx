@@ -11,6 +11,7 @@ import {
   arrayMove,
   verticalListSortingStrategy,
 } from "@dnd-kit/sortable";
+// replace your existing lucide-react import with this
 import {
   CalendarDays,
   CheckCircle2,
@@ -20,6 +21,7 @@ import {
   Sparkles,
   Trophy,
   Plus,
+  User,
 } from "lucide-react";
 
 import Toast from "./components/Toast";
@@ -33,14 +35,19 @@ import {
   paletteFor,
   Category,
 } from "./lib/core";
-import { loadWeekData, saveWeekData, ensureFirebase } from "./lib/store";
+import {
+  loadWeekData,
+  saveWeekData,
+  ensureFirebase,
+  migrateLocalWeeks,
+} from "./lib/store";
 import ProfilePage from "./pages/ProfilePage";
 import AuthPage from "./pages/AuthPage";
 import DashboardPage from "./pages/DashboardPage";
 import { generateAIReport } from "./lib/report";
 
 import { getAuth, onAuthStateChanged, signOut } from "firebase/auth";
-
+import { doc, getDoc } from "firebase/firestore";
 export default function GoalChallengeApp() {
   const [tab, setTab] = useState<"goals" | "profile" | "auth" | "dashboard">(
     "goals"
@@ -58,6 +65,13 @@ export default function GoalChallengeApp() {
     localStorage.setItem(profileIdKey, id);
     return id;
   });
+
+  useEffect(() => {
+    if (!profileId) return;
+    migrateLocalWeeks(profileId).catch((e) =>
+      console.warn("migration failed", e)
+    );
+  }, [profileId]);
 
   // Wire Firebase Auth listener
   useEffect(() => {
@@ -444,6 +458,43 @@ export default function GoalChallengeApp() {
         icon: <CheckCircle2 className="h-4 w-4 text-white" />,
       };
 
+  // Helper: pick a provider photo if available
+  function providerPhoto(u: any): string | null {
+    if (!u) return null;
+    if (u.photoURL) return u.photoURL as string;
+    const fromProvider = (u.providerData || []).find(
+      (p: any) => p?.photoURL
+    )?.photoURL;
+    return (fromProvider as string) || null;
+  }
+
+  // Load profile photoUrl once per signed-in user (no realtime listener)
+  const [profilePhotoUrl, setProfilePhotoUrl] = useState<string | null>(null);
+  useEffect(() => {
+    const { db } = ensureFirebase();
+    if (!authUser || !db) {
+      setProfilePhotoUrl(null);
+      return;
+    }
+
+    (async () => {
+      try {
+        const snap = await getDoc(doc(db, "profiles", authUser.uid));
+        setProfilePhotoUrl(
+          snap.exists() ? (snap.data() as any).photoUrl || null : null
+        );
+      } catch {
+        setProfilePhotoUrl(null);
+      }
+    })();
+  }, [authUser]);
+
+  // Final avatar URL: prefer uploaded profile photo over provider photo
+  const avatarUrl = useMemo(
+    () => profilePhotoUrl || providerPhoto(authUser),
+    [profilePhotoUrl, authUser]
+  );
+
   return (
     <div className="min-h-screen bg-[radial-gradient(1200px_600px_at_10%_0%,#eef2ff_0%,transparent_60%),radial-gradient(1200px_600px_at_90%_100%,#ecfeff_0%,transparent_60%)] bg-slate-50 p-5">
       <div className="mx-auto max-w-[1400px]">
@@ -458,7 +509,7 @@ export default function GoalChallengeApp() {
             >
               Goals
             </button>
-            <button
+            {/* <button
               onClick={() => setTab("profile")}
               className={`rounded-xl px-3 py-1.5 text-sm ${
                 tab === "profile"
@@ -467,7 +518,7 @@ export default function GoalChallengeApp() {
               }`}
             >
               Profile
-            </button>
+            </button> */}
 
             <button
               onClick={() => setTab("dashboard")}
@@ -480,7 +531,7 @@ export default function GoalChallengeApp() {
               Dashboard
             </button>
 
-            {!authUser && (
+            {/* {!authUser && (
               <button
                 onClick={() => setTab("auth")}
                 className={`rounded-xl px-3 py-1.5 text-sm ${
@@ -491,7 +542,7 @@ export default function GoalChallengeApp() {
               >
                 Account
               </button>
-            )}
+            )} */}
           </div>
           <div className="flex items-center gap-2">
             {tab === "goals" && (
@@ -515,24 +566,67 @@ export default function GoalChallengeApp() {
               </>
             )}
             {authUser ? (
-              <div className="ml-3 flex items-center gap-2 rounded-xl border border-neutral-300 bg-white px-3 py-1.5 text-xs shadow-sm">
-                <span className="max-w-[180px] truncate">
-                  {authUser.displayName || authUser.email}
-                </span>
+              <>
+                <div className="relative group ml-2">
+                  <button
+                    onClick={() => setTab("profile")}
+                    className="relative inline-flex h-9 w-9 items-center justify-center overflow-hidden rounded-full border border-neutral-300 bg-white shadow-sm hover:ring-2 hover:ring-neutral-200"
+                    title="Open profile"
+                  >
+                    {avatarUrl ? (
+                      <img
+                        src={avatarUrl}
+                        alt="User avatar"
+                        className="h-full w-full object-cover"
+                      />
+                    ) : (
+                      <User className="h-5 w-5 text-neutral-600" />
+                    )}
+                  </button>
+
+                  {/* hover tooltip */}
+                  <div className="pointer-events-none absolute right-0 z-50 mt-2 w-60 translate-y-1 opacity-0 transition-all duration-150 group-hover:translate-y-0 group-hover:opacity-100">
+                    <div className="rounded-xl border border-neutral-200 bg-white p-3 text-xs shadow-lg">
+                      <div className="font-medium text-neutral-900">
+                        {authUser.displayName || "User"}
+                      </div>
+                      <div className="mt-0.5 text-neutral-600">
+                        {authUser.email}
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
                 <button
-                  onClick={() => signOut(getAuth())}
-                  className="rounded-lg px-2 py-1 hover:bg-neutral-100"
+                  onClick={() => {
+                    signOut(getAuth());
+                    setTab("goals");
+                  }}
+                  className="ml-2 rounded-xl border border-neutral-300 bg-white px-3 py-1.5 text-xs shadow-sm hover:bg-neutral-50"
                 >
                   Sign out
                 </button>
-              </div>
+              </>
             ) : (
-              <button
-                onClick={() => setTab("auth")}
-                className="ml-2 rounded-xl border border-neutral-300 bg-white px-3 py-1.5 text-xs shadow-sm hover:bg-neutral-50"
-              >
-                Sign in
-              </button>
+              <div className="relative group ml-2">
+                <button
+                  onClick={() => setTab("auth")}
+                  className="relative inline-flex h-9 w-9 items-center justify-center overflow-hidden rounded-full border border-neutral-300 bg-white shadow-sm hover:ring-2 hover:ring-neutral-200"
+                  title="Sign in"
+                >
+                  <User className="h-5 w-5 text-neutral-600" />
+                </button>
+
+                {/* hover tooltip */}
+                <div className="pointer-events-none absolute right-0 z-50 mt-2 w-44 translate-y-1 opacity-0 transition-all duration-150 group-hover:translate-y-0 group-hover:opacity-100">
+                  <div className="rounded-xl border border-neutral-200 bg-white p-3 text-xs shadow-lg">
+                    <div className="font-medium text-neutral-900">Sign in</div>
+                    <div className="mt-0.5 text-neutral-600">
+                      Click to log in
+                    </div>
+                  </div>
+                </div>
+              </div>
             )}
           </div>
         </div>

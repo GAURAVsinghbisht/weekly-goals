@@ -15,7 +15,12 @@ import {
 import type { Profile } from "../lib/core";
 import { ensureFirebase } from "../lib/store";
 import { uid } from "../lib/core";
-import { getAuth, onAuthStateChanged } from "firebase/auth";
+import {
+  getAuth,
+  onAuthStateChanged,
+  User,
+  updateProfile,
+} from "firebase/auth";
 
 export default function ProfilePage() {
   const [loading, setLoading] = useState(false);
@@ -159,7 +164,22 @@ export default function ProfilePage() {
         { ...payload, updatedAt: serverTimestamp() },
         { merge: true }
       );
+
+      // Update local state/preview with whatever we saved
+      setProfile((p) => ({ ...p, photoUrl }));
+      setPreview(photoUrl || getProviderPhoto(authUser));
+
       setInfo("Profile saved.");
+
+      // NEW: also update Firebase Auth profile photo so top-nav avatars using auth.photoURL reflect the new image
+      try {
+        const a = getAuth();
+        if (a.currentUser && photoUrl) {
+          await updateProfile(a.currentUser, { photoURL: photoUrl });
+        }
+      } catch(e){
+        console.log(e)
+      }
     } catch (e: any) {
       console.error(e);
       return;
