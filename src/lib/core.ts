@@ -1,22 +1,60 @@
+export type Goal = {
+  id: string;
+  title: string;
+  picked: boolean;
+  completed: boolean;
 
-export type Goal = { id: string; title: string; picked: boolean; completed: boolean };
+  // NEW — optional so old data still works
+  trackDaily?: boolean; // when true, completion is driven by daily[]
+  daily?: boolean[]; // length=7, Monday .. Sunday
+};
 export type Category = { id: string; name: string; goals: Goal[] };
-export type Profile = { name: string; age: number | "" ; sex: "Male" | "Female" | "Other" | "" ; email?: string; bloodGroup?: string; maritalStatus?: "Single" | "Married" | "Other" | "" ; occupation?: "Job" | "Business" | "Student" | "Other" | "" ; photoUrl?: string };
+export type Profile = {
+  name: string;
+  age: number | "";
+  sex: "Male" | "Female" | "Other" | "";
+  email?: string;
+  bloodGroup?: string;
+  maritalStatus?: "Single" | "Married" | "Other" | "";
+  occupation?: "Job" | "Business" | "Student" | "Other" | "";
+  photoUrl?: string;
+};
 
-export function uid() { return Math.random().toString(36).slice(2, 9); }
+export function uid() {
+  return Math.random().toString(36).slice(2, 9);
+}
 
 export function startOfWeekKolkata(date = new Date()) {
-  const fmt = new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Kolkata", year: "numeric", month: "2-digit", day: "2-digit", weekday: "short" });
+  const fmt = new Intl.DateTimeFormat("en-CA", {
+    timeZone: "Asia/Kolkata",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    weekday: "short",
+  });
   const parts = fmt.formatToParts(date);
-  const y = Number(parts.find(p => p.type === "year")?.value);
-  const m = Number(parts.find(p => p.type === "month")?.value);
-  const d = Number(parts.find(p => p.type === "day")?.value);
-  const wd = new Intl.DateTimeFormat("en", { weekday: "short", timeZone: "Asia/Kolkata" }).format(date);
-  const map: Record<string, number> = { Mon: 0, Tue: 1, Wed: 2, Thu: 3, Fri: 4, Sat: 5, Sun: 6 };
+  const y = Number(parts.find((p) => p.type === "year")?.value);
+  const m = Number(parts.find((p) => p.type === "month")?.value);
+  const d = Number(parts.find((p) => p.type === "day")?.value);
+  const wd = new Intl.DateTimeFormat("en", {
+    weekday: "short",
+    timeZone: "Asia/Kolkata",
+  }).format(date);
+  const map: Record<string, number> = {
+    Mon: 0,
+    Tue: 1,
+    Wed: 2,
+    Thu: 3,
+    Fri: 4,
+    Sat: 5,
+    Sun: 6,
+  };
   const offset = map[wd as keyof typeof map] ?? 0;
   const local = new Date(Date.UTC(y, m - 1, d));
   local.setUTCDate(local.getUTCDate() - offset);
-  return new Date(Date.UTC(local.getUTCFullYear(), local.getUTCMonth(), local.getUTCDate()));
+  return new Date(
+    Date.UTC(local.getUTCFullYear(), local.getUTCMonth(), local.getUTCDate())
+  );
 }
 
 export function fmtDateUTCYYYYMMDD(d: Date) {
@@ -26,13 +64,46 @@ export function fmtDateUTCYYYYMMDD(d: Date) {
   return `${yyyy}-${mm}-${dd}`;
 }
 
-const PALETTES: Record<string, { col: string; chip: string; border: string; heading: string; }> = {
-  health:    { col: "bg-gradient-to-br from-emerald-100 to-emerald-200", chip: "bg-emerald-600 text-white", border:"border-emerald-300", heading:"text-emerald-900" },
-  learning:  { col: "bg-gradient-to-br from-sky-100 to-indigo-200",     chip: "bg-indigo-600 text-white",  border:"border-indigo-300", heading:"text-indigo-900" },
-  career:    { col: "bg-gradient-to-br from-amber-100 to-orange-200",   chip: "bg-amber-600 text-white",   border:"border-amber-300", heading:"text-amber-900" },
-  relation:  { col: "bg-gradient-to-br from-rose-100 to-pink-200",      chip: "bg-rose-600 text-white",    border:"border-rose-300", heading:"text-rose-900" },
-  finance:   { col: "bg-gradient-to-br from-teal-100 to-emerald-200",   chip: "bg-teal-600 text-white",    border:"border-teal-300", heading:"text-teal-900" },
-  fun:       { col: "bg-gradient-to-br from-violet-100 to-fuchsia-200", chip: "bg-fuchsia-600 text-white", border:"border-fuchsia-300", heading:"text-fuchsia-900" },
+const PALETTES: Record<
+  string,
+  { col: string; chip: string; border: string; heading: string }
+> = {
+  health: {
+    col: "bg-gradient-to-br from-emerald-100 to-emerald-200",
+    chip: "bg-emerald-600 text-white",
+    border: "border-emerald-300",
+    heading: "text-emerald-900",
+  },
+  learning: {
+    col: "bg-gradient-to-br from-sky-100 to-indigo-200",
+    chip: "bg-indigo-600 text-white",
+    border: "border-indigo-300",
+    heading: "text-indigo-900",
+  },
+  career: {
+    col: "bg-gradient-to-br from-amber-100 to-orange-200",
+    chip: "bg-amber-600 text-white",
+    border: "border-amber-300",
+    heading: "text-amber-900",
+  },
+  relation: {
+    col: "bg-gradient-to-br from-rose-100 to-pink-200",
+    chip: "bg-rose-600 text-white",
+    border: "border-rose-300",
+    heading: "text-rose-900",
+  },
+  finance: {
+    col: "bg-gradient-to-br from-teal-100 to-emerald-200",
+    chip: "bg-teal-600 text-white",
+    border: "border-teal-300",
+    heading: "text-teal-900",
+  },
+  fun: {
+    col: "bg-gradient-to-br from-violet-100 to-fuchsia-200",
+    chip: "bg-fuchsia-600 text-white",
+    border: "border-fuchsia-300",
+    heading: "text-fuchsia-900",
+  },
 };
 export function paletteFor(name: string) {
   const key = name.toLowerCase();
@@ -45,35 +116,64 @@ export function paletteFor(name: string) {
 }
 
 export const DEFAULT_DATA: Category[] = [
-  { id: uid(), name: "Health & Energy", goals: [
-    { id: uid(), title: "30-min workout", picked: false, completed: false },
-    { id: uid(), title: "Sleep 7+ hours", picked: false, completed: false },
-    { id: uid(), title: "10k steps", picked: false, completed: false },
-    { id: uid(), title: "Meditate 10 min", picked: false, completed: false },
-  ]},
-  { id: uid(), name: "Learning & Growth", goals: [
-    { id: uid(), title: "Read 20 pages", picked: false, completed: false },
-    { id: uid(), title: "Course lesson", picked: false, completed: false },
-    { id: uid(), title: "Write notes", picked: false, completed: false },
-  ]},
-  { id: uid(), name: "Career & Craft", goals: [
-    { id: uid(), title: "Deep work (90m)", picked: false, completed: false },
-    { id: uid(), title: "Ship a task", picked: false, completed: false },
-    { id: uid(), title: "Mentor someone", picked: false, completed: false },
-  ]},
-  { id: uid(), name: "Relationships", goals: [
-    { id: uid(), title: "Quality time", picked: false, completed: false },
-    { id: uid(), title: "Call a friend", picked: false, completed: false },
-    { id: uid(), title: "Acts of kindness", picked: false, completed: false },
-  ]},
-  { id: uid(), name: "Finance", goals: [
-    { id: uid(), title: "Track expenses", picked: false, completed: false },
-    { id: uid(), title: "No-spend day", picked: false, completed: false },
-    { id: uid(), title: "Invest/Plan", picked: false, completed: false },
-  ]},
-  { id: uid(), name: "Fun & Spirit", goals: [
-    { id: uid(), title: "Hobby session", picked: false, completed: false },
-    { id: uid(), title: "Get outdoors", picked: false, completed: false },
-    { id: uid(), title: "Gratitude journal", picked: false, completed: false },
-  ]},
+  {
+    id: uid(),
+    name: "Health & Energy",
+    goals: [
+      { id: uid(), title: "30-min workout", picked: false, completed: false },
+      { id: uid(), title: "Sleep 7+ hours", picked: false, completed: false },
+      { id: uid(), title: "10k steps", picked: false, completed: false },
+      { id: uid(), title: "Meditate 10 min", picked: false, completed: false },
+    ],
+  },
+  {
+    id: uid(),
+    name: "Learning & Growth",
+    goals: [
+      { id: uid(), title: "Read 20 pages", picked: false, completed: false },
+      { id: uid(), title: "Course lesson", picked: false, completed: false },
+      { id: uid(), title: "Write notes", picked: false, completed: false },
+    ],
+  },
+  {
+    id: uid(),
+    name: "Career & Craft",
+    goals: [
+      { id: uid(), title: "Deep work (90m)", picked: false, completed: false },
+      { id: uid(), title: "Ship a task", picked: false, completed: false },
+      { id: uid(), title: "Mentor someone", picked: false, completed: false },
+    ],
+  },
+  {
+    id: uid(),
+    name: "Relationships",
+    goals: [
+      { id: uid(), title: "Quality time", picked: false, completed: false },
+      { id: uid(), title: "Call a friend", picked: false, completed: false },
+      { id: uid(), title: "Acts of kindness", picked: false, completed: false },
+    ],
+  },
+  {
+    id: uid(),
+    name: "Finance",
+    goals: [
+      { id: uid(), title: "Track expenses", picked: false, completed: false },
+      { id: uid(), title: "No-spend day", picked: false, completed: false },
+      { id: uid(), title: "Invest/Plan", picked: false, completed: false },
+    ],
+  },
+  {
+    id: uid(),
+    name: "Fun & Spirit",
+    goals: [
+      { id: uid(), title: "Hobby session", picked: false, completed: false },
+      { id: uid(), title: "Get outdoors", picked: false, completed: false },
+      {
+        id: uid(),
+        title: "Gratitude journal",
+        picked: false,
+        completed: false,
+      },
+    ],
+  },
 ];
