@@ -770,6 +770,7 @@ export default function GoalChallengeApp() {
               name: authUser?.displayName || null,
               email: authUser?.email || null,
             }}
+            profileId={profileId}
             onGenerateReport={async () =>
               await generateAIReport({
                 weekStamp,
