@@ -24,52 +24,59 @@ export default function AuthPage({ onSignedIn }: { onSignedIn?: () => void }) {
   const auth = getAuth(); // get the Auth instance separately
 
   const afterAuth = async (user: any, fallbackName?: string) => {
-    // Redirect immediately
+    // Navigate immediately for snappy UX
     onSignedIn?.();
-
-    // Fire-and-forget profile/user upsert (do not block UI)
+  
+    // Fire-and-forget persistence; don't block UI
     (async () => {
       try {
         const { db } = ensureFirebase();
         if (!db || !user) return;
-
+  
         const displayName = user.displayName || fallbackName || "";
         const photoURL = user.photoURL || "";
-        const providerIds = (user.providerData || []).map(
-          (p: any) => p?.providerId
-        );
-
-        await Promise.allSettled([
-          setDoc(
-            doc(db, "users", user.uid),
-            {
-              uid: user.uid,
-              email: user.email,
-              displayName,
-              photoURL,
-              providerIds,
-              lastLoginAt: serverTimestamp(),
-              createdAt: serverTimestamp(),
-            },
-            { merge: true }
-          ),
-          setDoc(
-            doc(db, "profiles", user.uid),
-            {
-              name: displayName,
-              email: user.email,
-              photoUrl: photoURL,
-              updatedAt: serverTimestamp(),
-            },
-            { merge: true }
-          ),
-        ]);
+        const providerIds = (user.providerData || []).map((p: any) => p?.providerId);
+  
+        // ----- users -----
+        const userRef = doc(db, "users", user.uid);
+        const userSnap = await getDoc(userRef);
+  
+        const userPayload: any = {
+          uid: user.uid,
+          email: user.email,
+          displayName,
+          photoURL,
+          providerIds,
+          lastLoginAt: serverTimestamp(),
+        };
+        if (!userSnap.exists()) {
+          // only set once
+          userPayload.createdAt = serverTimestamp();
+        }
+        await setDoc(userRef, userPayload, { merge: true });
+  
+        // ----- profiles -----
+        const profileRef = doc(db, "profiles", user.uid);
+        const profileSnap = await getDoc(profileRef);
+  
+        const profilePayload: any = {
+          name: displayName,
+          email: user.email,
+          photoUrl: photoURL,
+          updatedAt: serverTimestamp(),
+        };
+        if (!profileSnap.exists()) {
+          // only set once
+          profilePayload.createdAt = serverTimestamp();
+        }
+        await setDoc(profileRef, profilePayload, { merge: true });
       } catch (e) {
-        // Don’t surface errors to UI; just log for debugging
+        // keep UI silent; log for debugging
         console.warn("Post-auth upsert failed:", e);
       }
     })();
   };
+  
 
   const doEmail = async () => {
     if (!auth) {
