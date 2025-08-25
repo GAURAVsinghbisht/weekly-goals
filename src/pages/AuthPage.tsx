@@ -6,8 +6,8 @@ import {
   createUserWithEmailAndPassword,
   signInWithEmailAndPassword,
   GoogleAuthProvider,
-  FacebookAuthProvider,
-  GithubAuthProvider,
+  // FacebookAuthProvider,
+  // GithubAuthProvider,
   signInWithPopup,
   updateProfile,
 } from "firebase/auth";
@@ -24,39 +24,51 @@ export default function AuthPage({ onSignedIn }: { onSignedIn?: () => void }) {
   const auth = getAuth(); // get the Auth instance separately
 
   const afterAuth = async (user: any, fallbackName?: string) => {
-    if (!db || !user) return;
-    const displayName = user.displayName || fallbackName || "";
-    const photoURL = user.photoURL || "";
-    const providerIds = (user.providerData || []).map((p: any) => p.providerId);
-
-    // Upsert into users collection
-    await setDoc(
-      doc(db, "users", user.uid),
-      {
-        uid: user.uid,
-        email: user.email || email,
-        displayName,
-        photoURL,
-        providerIds,
-        lastLoginAt: serverTimestamp(),
-        createdAt: serverTimestamp(),
-      },
-      { merge: true }
-    );
-
-    // Seed/sync profile
-    await setDoc(
-      doc(db, "profiles", user.uid),
-      {
-        name: displayName,
-        email: user.email || email,
-        photoUrl: photoURL,
-        updatedAt: serverTimestamp(),
-      },
-      { merge: true }
-    );
-
+    // Redirect immediately
     onSignedIn?.();
+
+    // Fire-and-forget profile/user upsert (do not block UI)
+    (async () => {
+      try {
+        const { db } = ensureFirebase();
+        if (!db || !user) return;
+
+        const displayName = user.displayName || fallbackName || "";
+        const photoURL = user.photoURL || "";
+        const providerIds = (user.providerData || []).map(
+          (p: any) => p?.providerId
+        );
+
+        await Promise.allSettled([
+          setDoc(
+            doc(db, "users", user.uid),
+            {
+              uid: user.uid,
+              email: user.email,
+              displayName,
+              photoURL,
+              providerIds,
+              lastLoginAt: serverTimestamp(),
+              createdAt: serverTimestamp(),
+            },
+            { merge: true }
+          ),
+          setDoc(
+            doc(db, "profiles", user.uid),
+            {
+              name: displayName,
+              email: user.email,
+              photoUrl: photoURL,
+              updatedAt: serverTimestamp(),
+            },
+            { merge: true }
+          ),
+        ]);
+      } catch (e) {
+        // Don’t surface errors to UI; just log for debugging
+        console.warn("Post-auth upsert failed:", e);
+      }
+    })();
   };
 
   const doEmail = async () => {
@@ -180,7 +192,36 @@ export default function AuthPage({ onSignedIn }: { onSignedIn?: () => void }) {
         <div className="h-px flex-1 bg-neutral-200" />
       </div>
 
-      <div className="grid grid-cols-1 gap-2 md:grid-cols-3">
+      <div className="flex justify-center">
+        <button
+          onClick={() => doPopup("google")}
+          className="inline-flex items-center gap-2 rounded-xl border border-neutral-300 bg-white px-4 py-2 text-sm shadow-sm hover:bg-neutral-50"
+          aria-label="Continue with Google"
+        >
+          {/* Google multi-color 'G' icon (inline SVG) */}
+          <svg viewBox="0 0 48 48" className="h-5 w-5" aria-hidden="true">
+            <path
+              fill="#FFC107"
+              d="M43.611 20.083H42V20H24v8h11.303C33.882 32.538 29.419 36 24 36c-6.627 0-12-5.373-12-12s5.373-12 12-12c3.059 0 5.842 1.156 7.961 3.039l5.657-5.657C34.869 6.053 29.7 4 24 4 12.954 4 4 12.954 4 24s8.954 20 20 20 20-8.954 20-20c0-1.341-.138-2.651-.389-3.917z"
+            />
+            <path
+              fill="#FF3D00"
+              d="M6.306 14.691l6.571 4.814C14.25 16.228 18.771 14 24 14c3.059 0 5.842 1.156 7.961 3.039l5.657-5.657C34.869 6.053 29.7 4 24 4 15.222 4 7.79 9.211 6.306 14.691z"
+            />
+            <path
+              fill="#4CAF50"
+              d="M24 44c5.343 0 10.25-2.045 13.959-5.39l-6.466-5.476C29.419 36 26.864 37 24 37c-5.395 0-9.927-3.442-11.598-8.198l-6.541 5.036C7.292 39.918 15.088 44 24 44z"
+            />
+            <path
+              fill="#1976D2"
+              d="M43.611 20.083H42V20H24v8h11.303C34.828 31.045 29.661 34 24 34c-5.395 0-9.927-3.442-11.598-8.198l-6.541 5.036C7.292 39.918 15.088 44 24 44c10.85 0 19.77-8.694 19.996-19.5.004-.167.004-.333.004-.5 0-1.341-.138-2.651-.389-3.917z"
+            />
+          </svg>
+          Continue with Google
+        </button>
+      </div>
+
+      {/* <div className="grid grid-cols-1 gap-2 md:grid-cols-3">
         <button
           onClick={() => doPopup("google")}
           className="rounded-xl border border-neutral-300 bg-white px-3 py-2 text-sm hover:bg-neutral-50"
@@ -199,12 +240,7 @@ export default function AuthPage({ onSignedIn }: { onSignedIn?: () => void }) {
         >
           GitHub
         </button>
-      </div>
-
-      <p className="mt-4 text-xs text-neutral-500">
-        Make sure you've enabled these providers in your Firebase Console and
-        configured OAuth redirect URIs for Facebook/GitHub.
-      </p>
+      </div> */}
     </div>
   );
 }

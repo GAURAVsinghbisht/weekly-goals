@@ -1,12 +1,12 @@
 import React, { useEffect, useState } from "react";
 import {
   doc,
-  getDoc,
+  getDocFromServer,
   getDocFromCache,
   serverTimestamp,
   setDoc,
-  enableNetwork,
 } from "firebase/firestore";
+
 import {
   getDownloadURL,
   ref as storageRef,
@@ -15,12 +15,7 @@ import {
 import type { Profile } from "../lib/core";
 import { ensureFirebase } from "../lib/store";
 import { uid } from "../lib/core";
-import {
-  getAuth,
-  onAuthStateChanged,
-  User,
-  updateProfile,
-} from "firebase/auth";
+import { getAuth, onAuthStateChanged, User } from "firebase/auth";
 
 export default function ProfilePage() {
   const [loading, setLoading] = useState(false);
@@ -40,8 +35,17 @@ export default function ProfilePage() {
   const [error, setError] = useState<string | null>(null);
   const [info, setInfo] = useState<string | null>(null);
 
-  const profileIdKey = "goal-challenge:profileId";
+  // after imports, inside component
+  const { db, storage } = ensureFirebase();
+
   const auth = getAuth();
+  const [authUser, setAuthUser] = useState<User | null>(auth.currentUser);
+  useEffect(() => {
+    const unsub = onAuthStateChanged(auth, setAuthUser);
+    return () => unsub();
+  }, [auth]);
+
+  const profileIdKey = "goal-challenge:profileId";
   const [profileId, setProfileId] = useState<string>(() => {
     const uidFromAuth = auth?.currentUser?.uid;
     if (uidFromAuth) return uidFromAuth;
@@ -52,6 +56,13 @@ export default function ProfilePage() {
     return id;
   });
 
+  function getProviderPhoto(u: User | null | undefined): string | null {
+    if (!u) return null;
+    if (u.photoURL) return u.photoURL;
+    const fromProvider = u.providerData?.find(p => !!p?.photoURL)?.photoURL;
+    return fromProvider || null;
+  }
+
   useEffect(() => {
     const unsub = onAuthStateChanged(auth, (u) => {
       if (u?.uid) setProfileId(u.uid);
@@ -60,69 +71,70 @@ export default function ProfilePage() {
   }, []);
 
   useEffect(() => {
+    let alive = true;
+    const isOffline = (e: any) =>
+      e?.code === "unavailable" ||
+      /offline|network|fetch/i.test(String(e?.message));
+
     (async () => {
       try {
         setLoading(true);
         setError(null);
         setInfo(null);
-        const { db } = ensureFirebase();
-        if (!db) {
-          console.log("Firebase not configured (missing env).");
-          return;
-        }
-
-        // Try to make sure Firestore network is enabled (handles cases where it was previously disabled)
-        try {
-          await enableNetwork(db);
-        } catch {
-          /* ignore; it's enabled by default */
-        }
+        if (!db) return;
 
         const ref = doc(db, "profiles", profileId);
-        let snap: any;
+        let snap: any = null;
+
+        // Try server first; if offline/fetch fails, fallback to cache
         try {
-          snap = await getDoc(ref);
+          snap = await getDocFromServer(ref);
         } catch (e: any) {
-          // Offline or network issue: try cache
-          if (
-            e?.code === "unavailable" ||
-            /offline/i.test(String(e?.message))
-          ) {
+          if (isOffline(e)) {
             try {
               snap = await getDocFromCache(ref);
-              setInfo("Loaded from local cache (offline).");
+              setInfo("Loaded from device cache.");
             } catch {
-              throw e;
+              /* no cache available */
             }
           } else {
-            throw e;
+            // Don’t surface raw Firestore errors to UI
+            console.warn("Profile getDocFromServer error:", e);
           }
         }
+        if (!alive) return;
 
+        const providerPhoto = getProviderPhoto(authUser);
         if (snap && snap.exists()) {
           const data = snap.data() as Profile;
           setProfile({
             name: data.name || "",
             age: (data.age as number) ?? "",
             sex: (data.sex as any) ?? "",
-            email: data.email || "",
+            email: data.email || authUser?.email || "",
             bloodGroup: data.bloodGroup || "",
             maritalStatus: (data.maritalStatus as any) ?? "",
             occupation: (data.occupation as any) ?? "",
             photoUrl: data.photoUrl || "",
           });
-          if (data.photoUrl) setPreview(data.photoUrl);
+          const effective =
+            data.photoUrl && data.photoUrl.length > 0
+              ? data.photoUrl
+              : providerPhoto || null;
+          setPreview(effective);
         } else {
-          // no profile yet — keep defaults
+          setProfile((p) => ({ ...p, email: authUser?.email || "" }));
+          setPreview(providerPhoto || null);
         }
-      } catch (e: any) {
-        console.warn("Profile load error:", e);
-        setError("Failed to load profile.");
       } finally {
-        setLoading(false);
+        if (alive) setLoading(false);
       }
     })();
-  }, [profileId]);
+
+    return () => {
+      alive = false;
+    };
+  }, [db, profileId, authUser]);
 
   const onFile = (f: File | null) => {
     setPhotoFile(f);
@@ -164,22 +176,7 @@ export default function ProfilePage() {
         { ...payload, updatedAt: serverTimestamp() },
         { merge: true }
       );
-
-      // Update local state/preview with whatever we saved
-      setProfile((p) => ({ ...p, photoUrl }));
-      setPreview(photoUrl || getProviderPhoto(authUser));
-
       setInfo("Profile saved.");
-
-      // NEW: also update Firebase Auth profile photo so top-nav avatars using auth.photoURL reflect the new image
-      try {
-        const a = getAuth();
-        if (a.currentUser && photoUrl) {
-          await updateProfile(a.currentUser, { photoURL: photoUrl });
-        }
-      } catch(e){
-        console.log(e)
-      }
     } catch (e: any) {
       console.error(e);
       return;

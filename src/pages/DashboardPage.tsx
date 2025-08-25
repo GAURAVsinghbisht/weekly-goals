@@ -2,33 +2,55 @@ import React, { useEffect, useMemo, useState } from "react";
 import type { Category } from "../lib/core";
 import { ensureFirebase } from "../lib/store";
 import {
-  addDoc, collection, getDocs, query, where, orderBy, limit,
-  doc, getDoc, setDoc, serverTimestamp
+  addDoc,
+  collection,
+  getDocs,
+  query,
+  where,
+  orderBy,
+  limit,
+  doc,
+  getDoc,
+  setDoc,
+  serverTimestamp,
 } from "firebase/firestore";
-import { CalendarDays, Download, LineChart, Percent, History, RefreshCw } from "lucide-react";
+import {
+  CalendarDays,
+  Download,
+  LineChart,
+  Percent,
+  History,
+  RefreshCw,
+} from "lucide-react";
 
 /** ---------- Types ---------- */
 type WeeklyMetrics = {
-  completionPercent: number;   // 0..100
-  activeDays: number;          // 0..7
-  longestStreak: number;       // consecutive active days
-  dayMap: boolean[];           // Mon..Sun
+  completionPercent: number; // 0..100
+  activeDays: number; // 0..7
+  longestStreak: number; // consecutive active days
+  dayMap: boolean[]; // Mon..Sun
 };
 
 type SavedWeeklyReport = {
   profileId: string;
   weekStamp: string;
-  report: string;              // markdown
+  report: string; // markdown
   metrics: WeeklyMetrics;
   updatedAt?: any;
   createdAt?: any;
-  id?: string;                 // history id (for listing)
+  id?: string; // history id (for listing)
 };
 
 /** ---------- Small UI bits ---------- */
 function Pill({ active }: { active: boolean }) {
   return (
-    <div className={`h-6 w-6 rounded-full border flex items-center justify-center ${active ? "bg-emerald-600 border-emerald-600 text-white" : "bg-white border-neutral-300 text-transparent"}`}>
+    <div
+      className={`h-6 w-6 rounded-full border flex items-center justify-center ${
+        active
+          ? "bg-emerald-600 border-emerald-600 text-white"
+          : "bg-white border-neutral-300 text-transparent"
+      }`}
+    >
       ✓
     </div>
   );
@@ -60,7 +82,9 @@ function getDayMap(categories: Category[]): boolean[] {
 
 function computeWeeklyMetrics(categories: Category[]): WeeklyMetrics {
   // progress: sum(min(2, completed per category)) / (6 * 2)
-  const perCatCompleted = categories.map(c => c.goals.filter(g => g.completed).length);
+  const perCatCompleted = categories.map(
+    (c) => c.goals.filter((g) => g.completed).length
+  );
   const earned = perCatCompleted.reduce((acc, n) => acc + Math.min(2, n), 0);
   const total = categories.length * 2 || 1;
   const completionPercent = Math.round((earned / total) * 100);
@@ -69,23 +93,35 @@ function computeWeeklyMetrics(categories: Category[]): WeeklyMetrics {
   const activeDays = dayMap.filter(Boolean).length;
 
   // longest streak (Mon..Sun)
-  let longest = 0, cur = 0;
+  let longest = 0,
+    cur = 0;
   for (let i = 0; i < dayMap.length; i++) {
-    if (dayMap[i]) { cur++; longest = Math.max(longest, cur); }
-    else cur = 0;
+    if (dayMap[i]) {
+      cur++;
+      longest = Math.max(longest, cur);
+    } else cur = 0;
   }
 
   return { completionPercent, activeDays, longestStreak: longest, dayMap };
 }
 
 /** ---------- Firestore helpers (local to this page) ---------- */
-async function saveWeeklyReport(profileId: string, weekStamp: string, report: string, metrics: WeeklyMetrics) {
+async function saveWeeklyReport(
+  profileId: string,
+  weekStamp: string,
+  report: string,
+  metrics: WeeklyMetrics
+) {
   const { db } = ensureFirebase();
   if (!db) return;
 
   // history
   await addDoc(collection(db, "weeklyReports"), {
-    profileId, weekStamp, report, metrics, createdAt: serverTimestamp(),
+    profileId,
+    weekStamp,
+    report,
+    metrics,
+    createdAt: serverTimestamp(),
   });
 
   // latest snapshot
@@ -96,7 +132,10 @@ async function saveWeeklyReport(profileId: string, weekStamp: string, report: st
   );
 }
 
-async function loadWeeklyReportLatest(profileId: string, weekStamp: string): Promise<SavedWeeklyReport | null> {
+async function loadWeeklyReportLatest(
+  profileId: string,
+  weekStamp: string
+): Promise<SavedWeeklyReport | null> {
   const { db } = ensureFirebase();
   if (!db) return null;
   const ref = doc(db, "weeklyReportsLatest", `${profileId}_${weekStamp}`);
@@ -105,7 +144,11 @@ async function loadWeeklyReportLatest(profileId: string, weekStamp: string): Pro
   return snap.data() as SavedWeeklyReport;
 }
 
-async function loadWeeklyReportHistory(profileId: string, weekStamp: string, max = 5): Promise<SavedWeeklyReport[]> {
+async function loadWeeklyReportHistory(
+  profileId: string,
+  weekStamp: string,
+  max = 5
+): Promise<SavedWeeklyReport[]> {
   const { db } = ensureFirebase();
   if (!db) return [];
   const q = query(
@@ -116,7 +159,7 @@ async function loadWeeklyReportHistory(profileId: string, weekStamp: string, max
     limit(max)
   );
   const s = await getDocs(q);
-  return s.docs.map(d => ({ id: d.id, ...(d.data() as any) }));
+  return s.docs.map((d) => ({ id: d.id, ...(d.data() as any) }));
 }
 
 /** ---------- Component ---------- */
@@ -153,17 +196,22 @@ export default function DashboardPage({
       setHistory(hist);
       setReport(latest?.report || "");
     })();
-    return () => { on = false; };
+    return () => {
+      on = false;
+    };
   }, [profileId, weekStamp]);
 
   // show Generate only when completion % or dayMap changed
   const needsNew = useMemo(() => {
     if (!saved) return true;
     const prev = saved.metrics;
-    return prev.completionPercent !== metrics.completionPercent || !arraysEqual(prev.dayMap || [], metrics.dayMap || []);
+    return (
+      prev.completionPercent !== metrics.completionPercent ||
+      !arraysEqual(prev.dayMap || [], metrics.dayMap || [])
+    );
   }, [saved, metrics]);
 
-  const days = ["Mon","Tue","Wed","Thu","Fri","Sat","Sun"];
+  const days = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
 
   async function generate() {
     setLoading(true);
@@ -178,7 +226,10 @@ export default function DashboardPage({
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             weekStamp,
-            profile: { name: profile?.name || null, email: profile?.email || null },
+            profile: {
+              name: profile?.name || null,
+              email: profile?.email || null,
+            },
             categories,
             metrics,
           }),
@@ -208,9 +259,15 @@ export default function DashboardPage({
     const blob = new Blob([report], { type: "text/markdown;charset=utf-8" });
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
-    const name = (profile?.name || "user").toString().replace(/\s+/g, "_").toLowerCase();
-    a.href = url; a.download = `goal-challenge_report_${name}_${weekStamp}.md`;
-    document.body.appendChild(a); a.click(); a.remove();
+    const name = (profile?.name || "user")
+      .toString()
+      .replace(/\s+/g, "_")
+      .toLowerCase();
+    a.href = url;
+    a.download = `goal-challenge_report_${name}_${weekStamp}.md`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
     URL.revokeObjectURL(url);
   }
 
@@ -233,21 +290,32 @@ export default function DashboardPage({
               <div className="flex items-center gap-2 text-xs text-neutral-500">
                 <Percent className="h-4 w-4" /> Challenge Progress
               </div>
-              <div className="mt-2 text-3xl font-bold">{metrics.completionPercent}%</div>
-              <div className="mt-1 text-xs text-neutral-500">toward 12 weekly targets (2 per category)</div>
+              <div className="mt-2 text-3xl font-bold">
+                {metrics.completionPercent}%
+              </div>
+              <div className="mt-1 text-xs text-neutral-500">
+                toward 12 weekly targets (2 per category)
+              </div>
               <div className="mt-3 h-2 w-full overflow-hidden rounded-full bg-neutral-100">
-                <div className="h-full bg-emerald-600" style={{ width: `${metrics.completionPercent}%` }} />
+                <div
+                  className="h-full bg-emerald-600"
+                  style={{ width: `${metrics.completionPercent}%` }}
+                />
               </div>
             </div>
 
             <div className="rounded-2xl border border-neutral-200 p-4">
               <div className="text-xs text-neutral-500">Active Days</div>
-              <div className="mt-2 text-3xl font-bold">{metrics.activeDays}/7</div>
+              <div className="mt-2 text-3xl font-bold">
+                {metrics.activeDays}/7
+              </div>
               <div className="mt-2 flex items-center gap-2">
                 {metrics.dayMap.map((on, i) => (
                   <div key={i} className="flex flex-col items-center gap-1">
                     <Pill active={on} />
-                    <span className="text-[10px] text-neutral-500">{days[i]}</span>
+                    <span className="text-[10px] text-neutral-500">
+                      {days[i]}
+                    </span>
                   </div>
                 ))}
               </div>
@@ -257,8 +325,12 @@ export default function DashboardPage({
               <div className="flex items-center gap-2 text-xs text-neutral-500">
                 <LineChart className="h-4 w-4" /> Continuity
               </div>
-              <div className="mt-2 text-3xl font-bold">{metrics.longestStreak}d</div>
-              <div className="mt-1 text-xs text-neutral-500">longest consecutive active run</div>
+              <div className="mt-2 text-3xl font-bold">
+                {metrics.longestStreak}d
+              </div>
+              <div className="mt-1 text-xs text-neutral-500">
+                longest consecutive active run
+              </div>
             </div>
           </div>
         </div>
@@ -275,7 +347,12 @@ export default function DashboardPage({
                   disabled={loading}
                   className="inline-flex items-center gap-1 rounded-xl bg-black px-3 py-1.5 text-xs text-white shadow-sm hover:bg-neutral-800 disabled:opacity-50"
                 >
-                  <RefreshCw className="h-4 w-4" /> {loading ? "Generating…" : (saved ? "Generate updated" : "Generate report")}
+                  <RefreshCw className="h-4 w-4" />{" "}
+                  {loading
+                    ? "Generating…"
+                    : saved
+                    ? "Generate updated"
+                    : "Generate report"}
                 </button>
               )}
               <button
@@ -291,12 +368,14 @@ export default function DashboardPage({
           {saved && needsNew && (
             <div className="mb-3 inline-flex items-center gap-2 rounded-xl bg-amber-50 px-3 py-2 text-xs text-amber-800">
               <History className="h-4 w-4" />
-              Metrics changed since the last report. Showing your previous report below — you can generate an updated one.
+              Metrics changed since the last report. Showing your previous
+              report below — you can generate an updated one.
             </div>
           )}
 
           <pre className="max-h-[380px] overflow-auto whitespace-pre-wrap rounded-2xl bg-neutral-50 p-4 text-sm text-neutral-800">
-{report || "No saved report yet. If the button above is hidden, your metrics haven’t changed since the last report."}
+            {report ||
+              "No saved report yet. Your metrics haven’t changed since the last report."}
           </pre>
 
           {history.length > 1 && (
@@ -312,9 +391,17 @@ export default function DashboardPage({
         <div className="rounded-3xl border border-neutral-200 bg-white p-5 shadow-sm">
           <div className="text-sm font-semibold">How this is calculated</div>
           <ul className="mt-2 list-disc space-y-2 pl-5 text-sm text-neutral-700">
-            <li><b>Challenge Progress</b> = sum over categories of <i>min(2, completed)</i> divided by 12.</li>
-            <li><b>Active Day</b> = any goal has a daily check for that day (Mon–Sun).</li>
-            <li><b>Continuity</b> = longest run of active days this week.</li>
+            <li>
+              <b>Challenge Progress</b> = sum over categories of{" "}
+              <i>min(2, completed)</i> divided by 12.
+            </li>
+            <li>
+              <b>Active Day</b> = any goal has a daily check for that day
+              (Mon–Sun).
+            </li>
+            <li>
+              <b>Continuity</b> = longest run of active days this week.
+            </li>
           </ul>
         </div>
       </div>
