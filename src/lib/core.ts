@@ -8,7 +8,12 @@ export type Goal = {
   trackDaily?: boolean; // when true, completion is driven by daily[]
   daily?: boolean[]; // length=7, Monday .. Sunday
 };
-export type Category = { id: string; name: string; goals: Goal[] };
+export type Category = {
+  id: string;
+  name: string;
+  goals: Goal[];
+  colorKey?: PaletteKey;
+};
 export type Profile = {
   name: string;
   age: number | "";
@@ -105,7 +110,8 @@ const PALETTES: Record<
     heading: "text-fuchsia-900",
   },
 };
-export function paletteFor(name: string) {
+export function paletteFor(name: string, hint?: PaletteKey) {
+  if (hint && NAMED_PALETTES[hint]) return NAMED_PALETTES[hint];
   const key = name.toLowerCase();
   if (key.includes("health") || key.includes("energy")) return PALETTES.health;
   if (key.includes("learn") || key.includes("growth")) return PALETTES.learning;
@@ -177,3 +183,80 @@ export const DEFAULT_DATA: Category[] = [
     ],
   },
 ];
+
+// ⬇️ NEW: export a palette key type and a map the UI expects
+export type PaletteKey =
+  | "emerald"
+  | "rose"
+  | "teal"
+  | "indigo"
+  | "violet"
+  | "amber"
+  | "lime"
+  | "fuchsia"
+  | "sky";
+
+const NAMED_PALETTES: Record<
+  PaletteKey,
+  {
+    border: string;
+    col: string;
+    heading: string;
+    chip: string;
+  }
+> = {
+  emerald: {
+    border: "border-emerald-200",
+    col: "bg-emerald-50/60",
+    heading: "text-emerald-900",
+    chip: "bg-emerald-100 text-emerald-900",
+  },
+  rose: {
+    border: "border-rose-200",
+    col: "bg-rose-50/60",
+    heading: "text-rose-900",
+    chip: "bg-rose-100 text-rose-900",
+  },
+  teal: {
+    border: "border-teal-200",
+    col: "bg-teal-50/60",
+    heading: "text-teal-900",
+    chip: "bg-teal-100 text-teal-900",
+  },
+  indigo: {
+    border: "border-indigo-200",
+    col: "bg-indigo-50/60",
+    heading: "text-indigo-900",
+    chip: "bg-indigo-100 text-indigo-900",
+  },
+  violet: {
+    border: "border-violet-200",
+    col: "bg-violet-50/60",
+    heading: "text-violet-900",
+    chip: "bg-violet-100 text-violet-900",
+  },
+  amber: {
+    border: "border-amber-200",
+    col: "bg-amber-50/60",
+    heading: "text-amber-900",
+    chip: "bg-amber-100 text-amber-900",
+  },
+  lime: {
+    border: "border-lime-200",
+    col: "bg-lime-50/60",
+    heading: "text-lime-900",
+    chip: "bg-lime-100 text-lime-900",
+  },
+  fuchsia: {
+    border: "border-fuchsia-200",
+    col: "bg-fuchsia-50/60",
+    heading: "text-fuchsia-900",
+    chip: "bg-fuchsia-100 text-fuchsia-900",
+  },
+  sky: {
+    border: "border-sky-200",
+    col: "bg-sky-50/60",
+    heading: "text-sky-900",
+    chip: "bg-sky-100 text-sky-900",
+  },
+};

@@ -22,6 +22,10 @@ import {
   Trophy,
   Plus,
   User,
+  Pencil,
+  Trash2,
+  Check,
+  X,
 } from "lucide-react";
 
 import Toast from "./components/Toast";
@@ -29,12 +33,15 @@ import ConfirmDialog from "./components/ConfirmDialog";
 import MilestoneCard from "./components/MilestoneCard";
 import SortableGoal from "./components/SortableGoal";
 
+// was: import { startOfWeekKolkata, fmtDateUTCYYYYMMDD, paletteFor, Category } from "./lib/core";
 import {
   startOfWeekKolkata,
   fmtDateUTCYYYYMMDD,
   paletteFor,
   Category,
+  type PaletteKey,
 } from "./lib/core";
+
 import {
   loadWeekData,
   saveWeekData,
@@ -101,6 +108,163 @@ export default function GoalChallengeApp() {
   const hydratingRef = useRef(false);
   const saveTimer = useRef<number | undefined>();
 
+  // === Week access gating ===
+
+  // Monday 00:00 IST (Kolkata) for any given date
+  function startOfWeekIST(d: Date) {
+    // shift to IST, find Monday, then shift back to UTC
+    const IST_OFFSET_MS = 5.5 * 60 * 60 * 1000;
+    const ist = new Date(d.getTime() + IST_OFFSET_MS);
+    const dow = ist.getUTCDay(); // 0..6 (Sun..Sat)
+    const delta = (dow + 6) % 7; // days since Monday
+    ist.setUTCHours(0, 0, 0, 0);
+    ist.setUTCDate(ist.getUTCDate() - delta);
+    return new Date(ist.getTime() - IST_OFFSET_MS);
+  }
+
+  // First-seen/account-created date
+  const accountCreatedAt = useMemo(() => {
+    if (authUser?.metadata?.creationTime) {
+      return new Date(authUser.metadata.creationTime);
+    }
+    // durable first-seen for anonymous users (doesn't block; used for tooltip copy fallback)
+    const key = "goal-challenge:firstSeen";
+    const ex = localStorage.getItem(key);
+    if (ex) return new Date(ex);
+    const now = new Date();
+    localStorage.setItem(key, now.toISOString());
+    return now;
+  }, [authUser]);
+
+  // Earliest allowed week (Monday IST of creation/first-seen)
+  const creationWeekStart = useMemo(
+    () => startOfWeekIST(accountCreatedAt),
+    [accountCreatedAt]
+  );
+
+  // Is clicking "Prev" going earlier than creation week? (only matters when signed in)
+  const prevWouldBeBeforeCreation = useMemo(() => {
+    const prev = new Date(weekStart);
+    prev.setUTCDate(prev.getUTCDate() - 7);
+    return !!authUser && prev < creationWeekStart;
+  }, [authUser, weekStart, creationWeekStart]);
+
+  // Modal for logged-out users who click past/future
+  const [gateOpen, setGateOpen] = useState(false);
+
+  // ---- Category management state ----
+  const genId = () =>
+    crypto.randomUUID?.() || Math.random().toString(36).slice(2, 9);
+  const [newCatName, setNewCatName] = useState("");
+  const [renamingCatId, setRenamingCatId] = useState<string | null>(null);
+  const [renameText, setRenameText] = useState("");
+
+  const canAddCategory = !isPast; // current + future
+  const canRenameDeleteCategory = !isPast && !isFuture; // current only
+  const catNameValid = canAddCategory && newCatName.trim().length > 0;
+
+  const addCategory = () => {
+    if (!canAddCategory) return;
+    const name = newCatName.trim();
+    if (!name) return; // prevent empty/whitespace names
+    const colorKey = aiColorKeyForCategory(name);
+    setCategories((prev) => [
+      ...prev,
+      { id: genId(), name, goals: [], colorKey },
+    ]);
+    setNewCatName("");
+  };
+
+  const startRenameCategory = (catId: string, current: string) => {
+    if (!canRenameDeleteCategory) return;
+    setRenamingCatId(catId);
+    setRenameText(current);
+  };
+
+  const commitRenameCategory = () => {
+    if (!canRenameDeleteCategory || !renamingCatId) return;
+    const name = renameText.trim();
+    if (!name) {
+      setRenamingCatId(null);
+      return;
+    }
+
+    const colorKey = aiColorKeyForCategory(name); // ⬇️ NEW
+    setCategories((prev) =>
+      prev.map((c) => (c.id === renamingCatId ? { ...c, name, colorKey } : c))
+    );
+    setRenamingCatId(null);
+  };
+
+  const renameCategory = (catId: string, newName: string) => {
+    if (isPast) return; // no edits in the past
+    const name = (newName || "").trim();
+    if (!name) return;
+    setCategories((prev) =>
+      prev.map((c) => (c.id === catId ? { ...c, name } : c))
+    );
+  };
+
+  const cancelRenameCategory = () => {
+    setRenamingCatId(null);
+    setRenameText("");
+  };
+
+  const deleteCategory = (catId: string) => {
+    if (isPast) return; // no edits in the past
+    if (categories.length <= 1) {
+      // nice toast instead of deleting the last category
+      setToast({
+        show: true,
+        title: "You need at least one category.",
+        subtitle: "Cannot delete the last category.",
+      });
+      return;
+    }
+    setCategories((prev) => prev.filter((c) => c.id !== catId));
+  };
+  // Extend confirm dialog to also handle category deletion (not only goals)
+  const requestDeleteCategory = (catId: string, title: string) => {
+    if (!canRenameDeleteCategory) return;
+    if (categories.length <= 1) {
+      setToast({
+        show: true,
+        title: "Can't delete the last category",
+        subtitle: "At least one category is required.",
+      });
+      return;
+    }
+    setConfirmDel({ open: true, catId, title });
+  };
+
+  // ⬇️ NEW: lightweight “AI” color guesser (keyword-based, runs offline)
+  function aiColorKeyForCategory(name: string): PaletteKey {
+    const n = (name || "").toLowerCase();
+
+    if (/(health|fit|workout|yoga|diet|gym|run|meditat|wellness)/.test(n))
+      return "emerald";
+    if (/(relationship|love|family|friends|social|romance|partner)/.test(n))
+      return "rose";
+    if (/(finance|money|budget|invest|wealth|saving|expense)/.test(n))
+      return "teal";
+    if (
+      /(career|work|job|startup|project|code|study|learn|education|school)/.test(
+        n
+      )
+    )
+      return "indigo";
+    if (/(mind|mental|spirit|faith|gratitude|journal|peace)/.test(n))
+      return "violet";
+    if (/(travel|adventure|outdoor|hike|nature|trip)/.test(n)) return "amber";
+    if (/(home|clean|organize|chores|garden|cook|meal|house)/.test(n))
+      return "lime";
+    if (/(creative|art|music|paint|write|drawing|design)/.test(n))
+      return "fuchsia";
+
+    // sensible default
+    return "sky";
+  }
+
   const sensors = useSensors(
     useSensor(PointerSensor, { activationConstraint: { distance: 6 } })
   );
@@ -117,8 +281,11 @@ export default function GoalChallengeApp() {
     setConfirmDel({ open: true, catId, goalId, title });
   };
   const confirmDelete = () => {
-    if (confirmDel.catId && confirmDel.goalId)
+    if (confirmDel.catId && confirmDel.goalId) {
       deleteGoal(confirmDel.catId, confirmDel.goalId);
+    } else if (confirmDel.catId && !confirmDel.goalId) {
+      deleteCategory(confirmDel.catId);
+    }
     setConfirmDel({ open: false });
   };
 
@@ -234,47 +401,102 @@ export default function GoalChallengeApp() {
   }, [categories, profileId, weekStamp]);
 
   // Stats & Milestones
-  const achievedPerCategory = categories.map(
-    (c) => c.goals.filter((g) => g.completed).length >= 2
+  // const achievedPerCategory = categories.map(
+  //   (c) => c.goals.filter((g) => g.completed).length >= 2
+  // );
+  // const achievedCount = achievedPerCategory.filter(Boolean).length;
+  // const milestoneLevel =
+  //   achievedCount === 6
+  //     ? "brilliant"
+  //     : achievedCount >= 4
+  //     ? "rocking"
+  //     : achievedCount >= 2
+  //     ? "right"
+  //     : "none";
+
+  // const prevLevel = useRef<string>("none");
+  // const [toast, setToast] = useState<{
+  //   show: boolean;
+  //   title: string;
+  //   subtitle?: string;
+  // }>({ show: false, title: "", subtitle: "" });
+  // useEffect(() => {
+  //   if (
+  //     !isPast &&
+  //     milestoneLevel !== "none" &&
+  //     milestoneLevel !== prevLevel.current
+  //   ) {
+  //     prevLevel.current = milestoneLevel;
+  //     const map = {
+  //       right: {
+  //         title: "You're on the right track!",
+  //         sub: "2 categories done. Keep the momentum!",
+  //       },
+  //       rocking: {
+  //         title: "You're rocking it!",
+  //         sub: "2 goals in 4+ categories. Outstanding!",
+  //       },
+  //       brilliant: {
+  //         title: "Brilliant week!",
+  //         sub: "2 goals in every category. You're unstoppable!",
+  //       },
+  //     } as const;
+  //     const m = map[milestoneLevel as keyof typeof map];
+  //     setToast({ show: true, title: m.title, subtitle: m.sub });
+  //   }
+  // }, [milestoneLevel, isPast]);
+
+  // ---- Percentage-based milestones over *picked* goals ----
+  const totalPicked = categories.reduce(
+    (acc, c) => acc + c.goals.filter((g) => g.picked).length,
+    0
   );
-  const achievedCount = achievedPerCategory.filter(Boolean).length;
-  const milestoneLevel =
-    achievedCount === 6
-      ? "brilliant"
-      : achievedCount >= 4
-      ? "rocking"
-      : achievedCount >= 2
-      ? "right"
-      : "none";
-  const prevLevel = useRef<string>("none");
+  const completedPicked = categories.reduce(
+    (acc, c) => acc + c.goals.filter((g) => g.picked && g.completed).length,
+    0
+  );
+  const completionPct =
+    totalPicked > 0 ? Math.round((completedPicked / totalPicked) * 100) : 0;
+
+  type Band = "improve" | "right" | "rock" | "brilliant";
+  const bandFromPct = (p: number): Band =>
+    p >= 80 ? "brilliant" : p >= 50 ? "rock" : p >= 20 ? "right" : "improve";
+  const milestoneLevel = bandFromPct(completionPct);
+
+  const prevLevel = useRef<Band>("improve");
   const [toast, setToast] = useState<{
     show: boolean;
     title: string;
     subtitle?: string;
   }>({ show: false, title: "", subtitle: "" });
+
   useEffect(() => {
-    if (
-      !isPast &&
-      milestoneLevel !== "none" &&
-      milestoneLevel !== prevLevel.current
-    ) {
+    if (isPast) return;
+    if (milestoneLevel !== prevLevel.current) {
+      // Only celebrate when moving to a higher band
+      const rank: Record<Band, number> = {
+        improve: 0,
+        right: 1,
+        rock: 2,
+        brilliant: 3,
+      };
+      if (rank[milestoneLevel] > rank[prevLevel.current]) {
+        const map: Record<Band, { title: string; sub: string }> = {
+          improve: { title: "Keep going!", sub: "Every small step counts." },
+          right: {
+            title: "You're on the right track!",
+            sub: "Nice momentum—keep it up!",
+          },
+          rock: { title: "You rock!", sub: "Over 50% done. Great pace!" },
+          brilliant: {
+            title: "Brilliant week!",
+            sub: "80%+ complete. You're unstoppable!",
+          },
+        };
+        const m = map[milestoneLevel];
+        setToast({ show: true, title: m.title, subtitle: m.sub });
+      }
       prevLevel.current = milestoneLevel;
-      const map = {
-        right: {
-          title: "You're on the right track!",
-          sub: "2 categories done. Keep the momentum!",
-        },
-        rocking: {
-          title: "You're rocking it!",
-          sub: "2 goals in 4+ categories. Outstanding!",
-        },
-        brilliant: {
-          title: "Brilliant week!",
-          sub: "2 goals in every category. You're unstoppable!",
-        },
-      } as const;
-      const m = map[milestoneLevel as keyof typeof map];
-      setToast({ show: true, title: m.title, subtitle: m.sub });
     }
   }, [milestoneLevel, isPast]);
 
@@ -499,7 +721,7 @@ export default function GoalChallengeApp() {
     <div className="min-h-screen bg-[radial-gradient(1200px_600px_at_10%_0%,#eef2ff_0%,transparent_60%),radial-gradient(1200px_600px_at_90%_100%,#ecfeff_0%,transparent_60%)] bg-slate-50 p-5">
       <div className="mx-auto max-w-[1400px]">
         {/* Top Nav */}
-        <div className="mb-4 flex items-center justify-between">
+        <div className="mb-4 flex flex-wrap items-center justify-between gap-2">
           <div className="flex items-center gap-2 rounded-2xl border border-neutral-300 bg-white p-1 shadow-sm">
             <button
               onClick={() => setTab("goals")}
@@ -544,22 +766,44 @@ export default function GoalChallengeApp() {
               </button>
             )} */}
           </div>
-          <div className="flex items-center gap-2">
+          <div className="flex flex-wrap items-center gap-2 sm:gap-3 max-w-full">
             {tab === "goals" && (
               <>
                 <button
-                  onClick={() => shiftWeek(-1)}
-                  className="rounded-xl border border-neutral-300 bg-white px-3 py-2 text-sm shadow-sm hover:bg-neutral-50"
+                  onClick={() => {
+                    if (!authUser) {
+                      setGateOpen(true);
+                      return;
+                    }
+                    if (!prevWouldBeBeforeCreation) shiftWeek(-1);
+                  }}
+                  disabled={!!authUser && prevWouldBeBeforeCreation}
+                  title={
+                    authUser && prevWouldBeBeforeCreation
+                      ? "No records exist before your account was created."
+                      : undefined
+                  }
+                  className="rounded-xl border ... px-3 py-1.5 text-xs sm:text-sm ..."
                 >
                   ◀ Prev
                 </button>
+
                 <div className="flex items-center gap-2 rounded-xl border border-neutral-300 bg-white px-3 py-2 text-sm shadow-sm">
                   <CalendarDays className="h-4 w-4" />
-                  <span className="tabular-nums">{weekLabel}</span>
+                  <span className="tabular-nums whitespace-nowrap">
+                    {weekLabel}
+                  </span>
                 </div>
+
                 <button
-                  onClick={() => shiftWeek(1)}
-                  className="rounded-xl border border-neutral-300 bg-white px-3 py-2 text-sm shadow-sm hover:bg-neutral-50"
+                  onClick={() => {
+                    if (!authUser) {
+                      setGateOpen(true);
+                      return;
+                    }
+                    shiftWeek(1);
+                  }}
+                  className="rounded-xl border ... px-3 py-1.5 text-xs sm:text-sm ..."
                 >
                   Next ▶
                 </button>
@@ -567,7 +811,7 @@ export default function GoalChallengeApp() {
             )}
             {authUser ? (
               <>
-                <div className="relative group ml-2">
+                <div className="relative group ml-2 shrink-0">
                   <button
                     onClick={() => setTab("profile")}
                     className="relative inline-flex h-9 w-9 items-center justify-center overflow-hidden rounded-full border border-neutral-300 bg-white shadow-sm hover:ring-2 hover:ring-neutral-200"
@@ -602,13 +846,13 @@ export default function GoalChallengeApp() {
                     signOut(getAuth());
                     setTab("goals");
                   }}
-                  className="ml-2 rounded-xl border border-neutral-300 bg-white px-3 py-1.5 text-xs shadow-sm hover:bg-neutral-50"
+                  className="ml-2 shrink-0 rounded-xl border ... px-3 py-1.5 text-xs ..."
                 >
                   Sign out
                 </button>
               </>
             ) : (
-              <div className="relative group ml-2">
+              <div className="relative group ml-2 shrink-0">
                 <button
                   onClick={() => setTab("auth")}
                   className="relative inline-flex h-9 w-9 items-center justify-center overflow-hidden rounded-full border border-neutral-300 bg-white shadow-sm hover:ring-2 hover:ring-neutral-200"
@@ -645,7 +889,7 @@ export default function GoalChallengeApp() {
             </div>
 
             {/* Milestones explainer */}
-            <div className="mb-2 grid grid-cols-1 gap-3 md:grid-cols-3">
+            <div className="mb-2 grid grid-cols-1 gap-3 md:grid-cols-4">
               <div className="flex items-start gap-3 rounded-2xl border border-emerald-200 bg-gradient-to-br from-emerald-50 to-lime-100 p-3">
                 <div className="rounded-xl bg-emerald-600/90 p-2 text-white">
                   <Trophy className="h-5 w-5" />
@@ -655,9 +899,8 @@ export default function GoalChallengeApp() {
                     Brilliant
                   </div>
                   <div className="text-xs text-emerald-800/80">
-                    If you have completed{" "}
-                    <span className="font-semibold">2 activities</span> from{" "}
-                    <span className="font-semibold">all 6 categories</span>.
+                    Complete <span className="font-semibold">80%+</span> of your{" "}
+                    <span className="font-semibold">picked</span> goals.
                   </div>
                 </div>
               </div>
@@ -667,12 +910,11 @@ export default function GoalChallengeApp() {
                 </div>
                 <div>
                   <div className="text-sm font-semibold text-indigo-900">
-                    You rock
+                    You Rock
                   </div>
                   <div className="text-xs text-indigo-800/80">
-                    If you have completed{" "}
-                    <span className="font-semibold">2 activities</span> from{" "}
-                    <span className="font-semibold">4 categories</span>.
+                    Complete <span className="font-semibold">50–79%</span> of
+                    picked goals.
                   </div>
                 </div>
               </div>
@@ -682,12 +924,25 @@ export default function GoalChallengeApp() {
                 </div>
                 <div>
                   <div className="text-sm font-semibold text-amber-900">
-                    You're on the right track
+                    Right Track
                   </div>
                   <div className="text-xs text-amber-800/80">
-                    If you have completed{" "}
-                    <span className="font-semibold">2 activities</span> from{" "}
-                    <span className="font-semibold">2 categories</span>.
+                    Complete <span className="font-semibold">20–49%</span> of
+                    picked goals.
+                  </div>
+                </div>
+              </div>
+              <div className="flex items-start gap-3 rounded-2xl border border-rose-200 bg-gradient-to-br from-rose-50 to-neutral-100 p-3">
+                <div className="rounded-xl bg-rose-500/90 p-2 text-white">
+                  <Sparkles className="h-5 w-5" />
+                </div>
+                <div>
+                  <div className="text-sm font-semibold text-rose-900">
+                    Need Improvement
+                  </div>
+                  <div className="text-xs text-rose-800/80">
+                    Complete <span className="font-semibold">below 20%</span> of
+                    picked goals.
                   </div>
                 </div>
               </div>
@@ -703,26 +958,78 @@ export default function GoalChallengeApp() {
               </span>
             </div>
 
+            <div className="mt-2">
+              <span className="inline-flex items-center gap-2 rounded-full bg-black px-3 py-1 text-xs text-white">
+                <CheckCircle2 className="h-4 w-4" />
+                {completionPct}% complete{" "}
+                {totalPicked > 0
+                  ? `(${completedPicked}/${totalPicked})`
+                  : "(no goals picked)"}
+              </span>
+            </div>
+
             {/* Milestones */}
-            <div className="mt-4 grid grid-cols-1 gap-3 md:grid-cols-3">
-              <MilestoneCard
-                level="right"
-                active={achievedCount >= 2}
-                label="On the Right Track"
-                desc="2 categories with 2 completed"
+            {/* Current milestone summary (single card with real % complete) */}
+            <div className="mt-4">
+              {(() => {
+                const map = {
+                  brilliant: {
+                    level: "brilliant" as const,
+                    label: "Brilliant",
+                  },
+                  rock: { level: "rocking" as const, label: "You Rock" }, // component expects "rocking"
+                  right: { level: "right" as const, label: "Right Track" },
+                  improve: {
+                    level: "improve" as const,
+                    label: "Need Improvement",
+                  },
+                };
+                const m = map[milestoneLevel];
+                const pctText =
+                  totalPicked > 0
+                    ? `${completionPct}% of picked goals (${completedPicked}/${totalPicked})`
+                    : `0% — pick some goals to get started`;
+
+                return (
+                  <MilestoneCard
+                    level={m.level}
+                    active={true}
+                    label={m.label}
+                    desc={pctText}
+                  />
+                );
+              })()}
+            </div>
+
+            {/* Add Category (current + future) */}
+            <div className="mt-4 flex items-center gap-2">
+              <input
+                value={newCatName}
+                onChange={(e) => setNewCatName(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" && catNameValid) addCategory();
+                }}
+                placeholder={
+                  isPast
+                    ? "Cannot add categories in past weeks"
+                    : "Add a category name"
+                }
+                disabled={!canAddCategory}
+                className={`flex-1 rounded-xl border border-neutral-300 bg-white px-3 py-2 text-sm ${
+                  !canAddCategory ? "opacity-50" : ""
+                }`}
               />
-              <MilestoneCard
-                level="rocking"
-                active={achievedCount >= 4}
-                label="Rocking"
-                desc="4 categories with 2 completed"
-              />
-              <MilestoneCard
-                level="brilliant"
-                active={achievedCount === 6}
-                label="Brilliant"
-                desc="All 6 categories achieved"
-              />
+              <button
+                onClick={addCategory}
+                disabled={!catNameValid}
+                className={`inline-flex items-center gap-1 rounded-xl bg-black px-3 py-2 text-xs text-white shadow-sm ${
+                  !catNameValid
+                    ? "opacity-50 cursor-not-allowed"
+                    : "hover:bg-neutral-800"
+                }`}
+              >
+                <Plus className="h-4 w-4" /> Add Category
+              </button>
             </div>
 
             {/* Columns */}
@@ -739,25 +1046,96 @@ export default function GoalChallengeApp() {
               <DndContext sensors={sensors} onDragEnd={onDragEnd}>
                 <div className="mt-6 grid grid-cols-1 gap-5 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-3">
                   {categories.map((cat) => {
-                    const pal = paletteFor(cat.name);
+                    const pal = paletteFor(cat.name, cat.colorKey);
                     return (
                       <div
                         key={cat.id}
                         className={`rounded-3xl border ${pal.border} ${pal.col} p-4 shadow-md`}
                       >
                         <div className="mb-3 flex items-center justify-between">
-                          <h2
-                            className={`text-lg font-semibold tracking-tight ${pal.heading}`}
-                          >
-                            {cat.name}
-                          </h2>
-                          <span
-                            className={`text-xs inline-flex items-center gap-2 rounded-full px-2 py-1 ${pal.chip}`}
-                          >
-                            {cat.goals.filter((g) => g.completed).length}/2
-                            completed
-                          </span>
+                          <div className="flex items-center gap-2">
+                            {renamingCatId === cat.id ? (
+                              <>
+                                <input
+                                  autoFocus
+                                  className={`rounded-lg border border-neutral-300 bg-white px-2 py-1 text-sm ${pal.heading}`}
+                                  value={renameText}
+                                  onChange={(e) =>
+                                    setRenameText(e.target.value)
+                                  }
+                                  onKeyDown={(e) => {
+                                    if (e.key === "Enter")
+                                      commitRenameCategory();
+                                    if (e.key === "Escape")
+                                      cancelRenameCategory();
+                                  }}
+                                  onBlur={commitRenameCategory}
+                                  placeholder="Category name"
+                                />
+                                <button
+                                  className="rounded-md p-1 text-emerald-600 hover:bg-emerald-50"
+                                  title="Save"
+                                  onMouseDown={(e) => e.preventDefault()}
+                                  onClick={commitRenameCategory}
+                                >
+                                  <Check className="h-4 w-4" />
+                                </button>
+                                <button
+                                  className="rounded-md p-1 text-rose-600 hover:bg-rose-50"
+                                  title="Cancel"
+                                  onMouseDown={(e) => e.preventDefault()}
+                                  onClick={cancelRenameCategory}
+                                >
+                                  <X className="h-4 w-4" />
+                                </button>
+                              </>
+                            ) : (
+                              <>
+                                <h2
+                                  className={`text-lg font-semibold tracking-tight ${pal.heading}`}
+                                >
+                                  {cat.name}
+                                </h2>
+                                {!isPast && (
+                                  <button
+                                    className="rounded-lg p-1.5 text-neutral-600 hover:bg-white/60"
+                                    title="Rename category"
+                                    onClick={() =>
+                                      startRenameCategory(cat.id, cat.name)
+                                    }
+                                  >
+                                    <Pencil className="h-4 w-4" />
+                                  </button>
+                                )}
+                              </>
+                            )}
+                          </div>
+
+                          <div className="flex items-center gap-2">
+                            <span
+                              className={`text-xs inline-flex items-center gap-2 rounded-full px-2 py-1 ${pal.chip}`}
+                            >
+                              {cat.goals.filter((g) => g.completed).length}/2
+                              completed
+                            </span>
+                            {!isPast && (
+                              <button
+                                className="rounded-lg p-1.5 text-neutral-600 hover:bg-white/60"
+                                title="Delete category"
+                                onClick={() =>
+                                  setConfirmDel({
+                                    open: true,
+                                    catId: cat.id,
+                                    title: cat.name,
+                                  })
+                                }
+                              >
+                                <Trash2 className="h-4 w-4" />
+                              </button>
+                            )}
+                          </div>
                         </div>
+
                         <SortableContext
                           items={cat.goals.map((g) => g.id)}
                           strategy={verticalListSortingStrategy}
@@ -902,10 +1280,14 @@ export default function GoalChallengeApp() {
 
       <ConfirmDialog
         open={confirmDel.open}
-        title="Delete this goal?"
+        title={
+          confirmDel.goalId ? "Delete this goal?" : "Delete this category?"
+        }
         description={
           confirmDel.title
-            ? `This will remove "${confirmDel.title}" from this week.`
+            ? confirmDel.goalId
+              ? `This will remove "${confirmDel.title}" from this week.`
+              : `This will remove the "${confirmDel.title}" category and its goals from this week.`
             : undefined
         }
         confirmText="Delete"
@@ -919,6 +1301,19 @@ export default function GoalChallengeApp() {
         title={toast.title}
         subtitle={toast.subtitle}
         onClose={() => setToast((s) => ({ ...s, show: false }))}
+      />
+
+      <ConfirmDialog
+        open={gateOpen}
+        title="Sign in to browse past or future weeks"
+        description="Past and future weeks are available for registered users. Create an account or sign in to continue."
+        confirmText="Sign in"
+        cancelText="Not now"
+        onConfirm={() => {
+          setGateOpen(false);
+          setTab("auth");
+        }}
+        onCancel={() => setGateOpen(false)}
       />
     </div>
   );

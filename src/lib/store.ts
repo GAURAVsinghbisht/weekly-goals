@@ -28,7 +28,12 @@ import {
 
 import { getStorage } from "firebase/storage";
 import type { Category } from "../lib/core";
-import { DEFAULT_DATA, uid } from "../lib/core";
+import {
+  DEFAULT_DATA,
+  uid,
+  startOfWeekKolkata,
+  fmtDateUTCYYYYMMDD,
+} from "../lib/core";
 import { getAuth } from "firebase/auth";
 
 const FIREBASE_CONFIG = {
@@ -78,50 +83,114 @@ export function freshWeekTemplate(): Category[] {
   }));
 }
 
+function sanitizeForTemplate(categories: Category[]): Category[] {
+  // keep names, reset flags, fresh ids
+  return categories.map((c) => ({
+    id: uid(),
+    name: c.name,
+    goals: (c.goals || []).map((g) => ({
+      id: uid(),
+      title: g.title,
+      picked: false,
+      completed: false,
+    })),
+  }));
+}
+
+async function loadTemplateCategories(
+  profileId: string
+): Promise<Category[] | null> {
+  const { db } = ensureFirebase();
+  if (!db) return null;
+  const t = await getDoc(doc(db, "weeklyTemplates", profileId));
+  if (!t.exists()) return null;
+  const data = t.data() as any;
+  if (Array.isArray(data.categories)) {
+    // fresh ids each week to keep dnd-kit happy
+    return sanitizeForTemplate(data.categories);
+  }
+  return null;
+}
+
+async function saveTemplateFromCurrentWeek(
+  profileId: string,
+  categories: Category[]
+) {
+  const { db } = ensureFirebase();
+  if (!db) return;
+  const sanitized = sanitizeForTemplate(categories);
+  await setDoc(
+    doc(db, "weeklyTemplates", profileId),
+    { categories: sanitized, updatedAt: serverTimestamp() },
+    { merge: true }
+  );
+}
+
 export async function loadWeekData(
   profileId: string,
   weekStamp: string
 ): Promise<Category[]> {
   const { db } = ensureFirebase();
-  if (!db) return freshWeekTemplate();
-
-  try {
-    const ref = doc(db, "weeklyGoals", `${profileId}_${weekStamp}`);
-    const snap = await getDoc(ref);
-    if (snap.exists()) {
-      const data = snap.data() as any;
-      if (Array.isArray(data.categories)) return data.categories as Category[];
+  // 1) Try existing week doc
+  if (db) {
+    try {
+      const snap = await getDoc(
+        doc(db, "weeklyGoals", `${profileId}_${weekStamp}`)
+      );
+      if (snap.exists()) {
+        const data = snap.data() as any;
+        if (Array.isArray(data.categories))
+          return data.categories as Category[];
+      }
+    } catch (e) {
+      console.warn("loadWeekData firestore", e);
     }
-    // Seed Firestore the first time this week is opened
-    const fresh = freshWeekTemplate();
-    await setDoc(
-      ref,
-      { profileId, weekStamp, categories: fresh, updatedAt: serverTimestamp() },
-      { merge: true }
-    );
-    return fresh;
-  } catch (e) {
-    console.warn("loadWeekData firestore", e);
-    return freshWeekTemplate();
   }
+
+  // 2) Seed from per-user template if present
+  try {
+    const templ = await loadTemplateCategories(profileId);
+    if (templ && templ.length) return templ;
+  } catch (e) {
+    console.warn("loadWeekData template", e);
+  }
+
+  // 3) (Optional) Legacy local fallback
+  const local = localStorage.getItem(`goal-challenge:${weekStamp}`);
+  if (local) {
+    try {
+      return JSON.parse(local) as Category[];
+    } catch {
+      /* ignore */
+    }
+  }
+
+  // 4) Default seed
+  return freshWeekTemplate();
 }
 
-export async function saveWeekData(
-  profileId: string,
-  weekStamp: string,
-  categories: Category[]
-) {
+export async function saveWeekData(profileId: string, weekStamp: string, categories: Category[]) {
   const { db } = ensureFirebase();
-  if (!db) return;
-  try {
-    await setDoc(
-      doc(db, "weeklyGoals", `${profileId}_${weekStamp}`),
-      { profileId, weekStamp, categories, updatedAt: serverTimestamp() },
-      { merge: true }
-    );
-  } catch (e) {
-    console.warn("saveWeekData firestore", e);
+  if (db) {
+    try {
+      await setDoc(
+        doc(db, "weeklyGoals", `${profileId}_${weekStamp}`),
+        { profileId, weekStamp, categories, updatedAt: serverTimestamp() },
+        { merge: true }
+      );
+
+      // If saving the CURRENT week, also update the template used for FUTURE weeks
+      const currentStamp = fmtDateUTCYYYYMMDD(startOfWeekKolkata());
+      if (weekStamp === currentStamp) {
+        await saveTemplateFromCurrentWeek(profileId, categories);
+      }
+    } catch (e) {
+      console.warn("saveWeekData firestore", e);
+    }
   }
+
+  // (Optional) Legacy local fallback
+  //localStorage.setItem(`goal-challenge:${weekStamp}`, JSON.stringify(categories));
 }
 
 export async function migrateLocalWeeks(profileId: string) {

@@ -53,6 +53,7 @@ export default function SortableGoal(props: Props) {
 
   const { attributes, listeners, setNodeRef, transform, transition } =
     useSortable({ id: goal.id, disabled: disabledDrag });
+
   const style: React.CSSProperties = {
     transform: CSS.Transform.toString(transform),
     transition,
@@ -69,6 +70,7 @@ export default function SortableGoal(props: Props) {
   // inline edit state
   const [editing, setEditing] = React.useState(false);
   const [draftTitle, setDraftTitle] = React.useState(goal.title);
+
   // kebab menu
   const [menuOpen, setMenuOpen] = useState(false);
   const menuRef = useRef<HTMLDivElement | null>(null);
@@ -96,7 +98,7 @@ export default function SortableGoal(props: Props) {
     const t = draftTitle.trim();
     setEditing(false);
     if (t && t !== goal.title) onRename?.(t);
-    else setDraftTitle(goal.title); // revert if empty/unchanged
+    else setDraftTitle(goal.title);
   };
 
   const cancelEdit = () => {
@@ -108,14 +110,14 @@ export default function SortableGoal(props: Props) {
     <div
       ref={setNodeRef}
       style={style}
-      className={`group rounded-2xl border border-neutral-200 bg-white p-3 shadow-sm ${
+      className={`group rounded-2xl border border-neutral-200 bg-white p-3 md:p-4 shadow-sm overflow-visible ${
         disabledDrag ? "" : "hover:shadow-md"
       }`}
     >
       <div className="flex items-start gap-3">
-        {/* drag handle */}
+        {/* drag handle (kept small on phones) */}
         <button
-          className={`mt-0.5 rounded-xl border border-neutral-200 p-2 ${
+          className={`mt-0.5 shrink-0 rounded-xl border border-neutral-200 p-1.5 md:p-2 ${
             disabledDrag
               ? "cursor-not-allowed opacity-50"
               : "cursor-grab active:cursor-grabbing"
@@ -126,10 +128,10 @@ export default function SortableGoal(props: Props) {
           <GripVertical className="h-4 w-4 opacity-60" />
         </button>
 
-        <div className="flex-1">
-          {/* Title + edit + kebab */}
-          <div className="flex items-center justify-between gap-2">
-            <div className="flex items-center gap-2">
+        <div className="min-w-0 flex-1">
+          {/* Title row */}
+          <div className="flex min-w-0 items-center justify-between gap-2">
+            <div className="min-w-0 flex items-center gap-2">
               {editing ? (
                 <input
                   autoFocus
@@ -140,7 +142,7 @@ export default function SortableGoal(props: Props) {
                     if (e.key === "Enter") commitEdit();
                     if (e.key === "Escape") cancelEdit();
                   }}
-                  className="min-w-0 flex-1 rounded-md border border-neutral-300 bg-white px-2 py-1 text-sm focus:outline-none focus:ring-2 focus:ring-neutral-200"
+                  className="w-full min-w-0 flex-1 rounded-md border border-neutral-300 bg-white px-2 py-1 text-sm focus:outline-none focus:ring-2 focus:ring-neutral-200"
                 />
               ) : (
                 <div className="min-w-0 truncate text-sm font-medium text-neutral-800">
@@ -148,11 +150,12 @@ export default function SortableGoal(props: Props) {
                 </div>
               )}
             </div>
-            <div className="relative flex items-center gap-1">
-              {/* Edit pencil — always visible */}
+
+            {/* action buttons never push the title out */}
+            <div className="relative flex shrink-0 items-center gap-1">
               {onRename && (
                 <button
-                  className={`rounded-lg p-1 hover:bg-neutral-100 ${
+                  className={`rounded-lg p-1.5 hover:bg-neutral-100 ${
                     disabledRename ? "cursor-not-allowed opacity-50" : ""
                   }`}
                   onClick={startEdit}
@@ -162,12 +165,11 @@ export default function SortableGoal(props: Props) {
                 </button>
               )}
 
-              {/* 3-dots kebab menu */}
               {(onDuplicate || onDelete) && (
                 <div className="relative" ref={menuRef}>
                   <button
                     onClick={() => setMenuOpen((v) => !v)}
-                    className={`rounded-lg p-1 hover:bg-neutral-100 ${
+                    className={`rounded-lg p-1.5 hover:bg-neutral-100 ${
                       disabledManage ? "cursor-not-allowed opacity-50" : ""
                     }`}
                     disabled={disabledManage}
@@ -175,8 +177,16 @@ export default function SortableGoal(props: Props) {
                   >
                     <MoreHorizontal className="h-4 w-4" />
                   </button>
+
                   {menuOpen && !disabledManage && (
-                    <div className="absolute right-0 z-20 mt-1 w-36 overflow-hidden rounded-xl border border-neutral-200 bg-white py-1 text-sm shadow-lg">
+                    <div
+                      className="
+                        absolute right-0 top-8 z-50 w-40
+                        overflow-hidden rounded-xl border border-neutral-200
+                        bg-white py-1 text-sm shadow-lg
+                        max-w-[calc(100vw-2rem)]
+                      "
+                    >
                       {onDuplicate && (
                         <button
                           className="flex w-full items-center gap-2 px-3 py-2 text-left hover:bg-neutral-50"
@@ -206,8 +216,8 @@ export default function SortableGoal(props: Props) {
             </div>
           </div>
 
-          {/* picked / completed */}
-          <div className="mt-1 flex items-center gap-4 text-[12px] text-neutral-600">
+          {/* picked / completed / daily toggle */}
+          <div className="mt-2 flex flex-wrap items-center gap-x-4 gap-y-2 text-[12px] text-neutral-600">
             <label
               className={`inline-flex items-center gap-2 ${
                 disabledPick ? "opacity-50" : ""
@@ -215,7 +225,7 @@ export default function SortableGoal(props: Props) {
             >
               <input
                 type="checkbox"
-                className="accent-black h-5 w-5"
+                className="accent-black h-4 w-4 sm:h-5 sm:w-5"
                 checked={!!goal.picked}
                 onChange={onTogglePicked}
                 disabled={disabledPick}
@@ -230,7 +240,7 @@ export default function SortableGoal(props: Props) {
             >
               <input
                 type="checkbox"
-                className="accent-green-600 h-5 w-5"
+                className="accent-green-600 h-4 w-4 sm:h-5 sm:w-5"
                 checked={!!goal.completed}
                 onChange={onToggleCompleted}
                 disabled={disabledComplete}
@@ -238,7 +248,6 @@ export default function SortableGoal(props: Props) {
               <span>completed</span>
             </label>
 
-            {/* iOS-style green toggle CHIP + label on the RIGHT */}
             {onToggleTrackDaily && (
               <div className="ml-auto flex items-center gap-2">
                 <button
@@ -268,16 +277,16 @@ export default function SortableGoal(props: Props) {
             )}
           </div>
 
-          {/* 7 radio-like dots with check inside */}
+          {/* 7 dots */}
           {goal.trackDaily && onToggleDay && (
-            <div className="mt-2 flex items-center gap-2">
+            <div className="mt-2 flex flex-wrap items-center gap-1.5 md:gap-2">
               {daily.map((on, idx) => (
                 <button
                   key={idx}
                   type="button"
                   onClick={() => onToggleDay(idx)}
                   disabled={disableDayChecks}
-                  className={`flex h-6 w-6 items-center justify-center rounded-full border transition ${
+                  className={`flex h-6 w-6 items-center justify-center rounded-full border transition md:h-7 md:w-7 ${
                     on
                       ? "border-emerald-600 bg-emerald-600 text-white"
                       : "border-neutral-300 bg-white text-transparent"
@@ -297,7 +306,7 @@ export default function SortableGoal(props: Props) {
         </div>
 
         {goal.completed ? (
-          <CheckCircle2 className="h-5 w-5 text-green-600" />
+          <CheckCircle2 className="h-5 w-5 shrink-0 text-green-600" />
         ) : null}
       </div>
     </div>
