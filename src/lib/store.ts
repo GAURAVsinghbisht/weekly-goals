@@ -234,6 +234,24 @@ export async function migrateLocalWeeks(profileId: string) {
   localStorage.setItem(flagKey, "1");
 }
 
+// bump simple local counters for quick UI
+function bumpLocalInteractions(kind: string) {
+  try {
+    const raw = localStorage.getItem("gc:interactions");
+    const obj = raw
+      ? JSON.parse(raw)
+      : { opens: 0, picks: 0, completes: 0, dayChecks: 0 };
+    if (kind === "open_week") obj.opens++;
+    if (kind === "pick_on" || kind === "pick_off") obj.picks++;
+    if (kind === "completed") obj.completes++;
+    if (kind === "daycheck_on" || kind === "daycheck_off") obj.dayChecks++;
+    obj.generatedAt = new Date().toISOString();
+    localStorage.setItem("gc:interactions", JSON.stringify(obj));
+  } catch {
+    /* ignore */
+  }
+}
+
 // Lightweight event logger (safe if Firestore not configured)
 export async function logEvent(
   profileId: string,
@@ -241,6 +259,8 @@ export async function logEvent(
   type: string,
   extra?: any
 ) {
+  bumpLocalInteractions(type);
+
   const { db } = ensureFirebase();
   if (!db) return;
   try {
@@ -251,8 +271,9 @@ export async function logEvent(
       extra: extra ?? null,
       createdAt: serverTimestamp(),
     } as any);
-  } catch {
-    /* ignore */
+  } catch (e) {
+    console.warn("loadWeekEvents error", e);
+    return [];
   }
 }
 

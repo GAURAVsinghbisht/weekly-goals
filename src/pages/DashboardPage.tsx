@@ -243,6 +243,7 @@ async function loadWeekEvents(
   profileId: string,
   weekStamp: string
 ): Promise<WeekEvent[]> {
+  console.log("dsfsdfsdfsdfsfdsfs");
   const { db } = ensureFirebase();
   if (!db) return [];
   try {
@@ -252,9 +253,12 @@ async function loadWeekEvents(
       where("weekStamp", "==", weekStamp),
       orderBy("createdAt", "asc")
     );
+    console.log("qy: ", qy);
     const s = await getDocs(qy);
+    console.log("s here: ", s);
     return s.docs.map((d) => d.data() as WeekEvent);
-  } catch {
+  } catch (e) {
+    console.log("Error: ", e);
     // If no index or events not present, just ignore.
     return [];
   }
@@ -386,11 +390,9 @@ export default function DashboardPage({
 
   // compute metrics & analytics
   const metrics = useMemo(() => {
-    const base = computeWeeklyMetrics(categories, events); // pass events too
-    return {
-      ...base,
-      interactions: getInteractionsFromStorage(), // keep your local snapshot
-    };
+    const data = computeWeeklyMetrics(categories, events); // <-- use the events you loaded
+    console.log("data: ", data);
+    return data;
   }, [categories, events]);
 
   const catStats = useMemo(
@@ -487,7 +489,7 @@ export default function DashboardPage({
             },
             categories,
             metrics: safeMetrics,
-            analytics
+            analytics,
           }),
         });
         if (!r.ok) throw new Error(`API error ${r.status}`);
@@ -505,7 +507,9 @@ export default function DashboardPage({
       setSaved(latest);
       setHistory(hist);
     } catch (e: any) {
-      setReport(`**Could not generate report**\n\n${e?.message || String(e)}`);
+      setReport(
+        "Could not generate report, Please try again after some time, or reload this page/screen"
+      );
     } finally {
       setLoading(false);
     }
@@ -725,7 +729,7 @@ export default function DashboardPage({
         <div className="rounded-3xl border border-neutral-200 bg-white p-5 shadow-sm">
           <div className="mb-2 flex items-center gap-2 text-sm font-semibold">
             <Clock className="h-4 w-4" />
-            App Activity (optional)
+            App Activity
           </div>
           {metrics.interactions ? (
             <div className="text-sm text-neutral-700">

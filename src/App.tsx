@@ -295,6 +295,7 @@ export default function GoalChallengeApp() {
   const addGoal = (catId: string, title: string) => {
     if (isPast) return; // no edits in the past
     if (!title) return;
+    logEvent(profileId, weekStamp, "goal_add", { catId, title });
     setCategories((prev) =>
       prev.map((c) =>
         c.id !== catId
@@ -319,6 +320,7 @@ export default function GoalChallengeApp() {
   };
   const renameGoal = (catId: string, goalId: string, newTitle: string) => {
     if (isPast) return; // no edits in the past
+    logEvent(profileId, weekStamp, "goal_rename", { catId, goalId, newTitle });
     setCategories((prev) =>
       prev.map((c) =>
         c.id !== catId
@@ -334,11 +336,17 @@ export default function GoalChallengeApp() {
   };
   const duplicateGoal = (catId: string, goalId: string) => {
     if (isPast) return; // no edits in the past
+
     setCategories((prev) =>
       prev.map((c) => {
         if (c.id !== catId) return c;
         const g = c.goals.find((x) => x.id === goalId);
         if (!g) return c;
+        logEvent(profileId, weekStamp, "goal_duplicate", {
+          catId,
+          goalId,
+          title: g?.title || "",
+        });
         return {
           ...c,
           goals: [
@@ -357,6 +365,14 @@ export default function GoalChallengeApp() {
   };
   const deleteGoal = (catId: string, goalId: string) => {
     if (isPast) return; // no edits in the past
+    const g = categories
+      .find((c) => c.id === catId)
+      ?.goals.find((x) => x.id === goalId);
+    logEvent(profileId, weekStamp, "goal_delete", {
+      catId,
+      goalId,
+      title: g?.title || "",
+    });
     setCategories((prev) =>
       prev.map((c) =>
         c.id !== catId
@@ -379,6 +395,8 @@ export default function GoalChallengeApp() {
         const data = await loadWeekData(profileId, weekStamp);
         if (!alive) return;
         setCategories(data);
+        // log: user opened this week
+        logEvent(profileId, weekStamp, "open_week");
       } finally {
         hydratingRef.current = false;
         setLoadingWeek(false);
@@ -522,6 +540,15 @@ export default function GoalChallengeApp() {
   };
   const togglePicked = (catId: string, goalId: string) => {
     if (isPast) return;
+    const cat = categories.find((c) => c.id === catId);
+    const goal = cat?.goals.find((g) => g.id === goalId);
+    const willPick = goal ? !goal.picked : false;
+    logEvent(profileId, weekStamp, willPick ? "pick_on" : "pick_off", {
+      catId,
+      goalId,
+      title: goal?.title || "",
+    });
+
     setCategories((prev) =>
       prev.map((c) =>
         c.id !== catId
@@ -534,7 +561,6 @@ export default function GoalChallengeApp() {
             }
       )
     );
-
   };
   const toggleCompleted = (catId: string, goalId: string) => {
     if (isPast || isFuture) return;
@@ -545,6 +571,12 @@ export default function GoalChallengeApp() {
     const willComplete = !!goal && !goal.completed;
     const goalTitle = goal?.title || "Goal";
     const catName = cat?.name || "";
+
+    logEvent(profileId, weekStamp, willComplete ? "completed" : "uncompleted", {
+      catId,
+      goalId,
+      title: goalTitle,
+    });
     setCategories((prev) =>
       prev.map((c) =>
         c.id !== catId
@@ -660,6 +692,8 @@ export default function GoalChallengeApp() {
   };
 
   const shiftWeek = (delta: number) => {
+    logEvent(profileId, weekStamp, "week_nav", { delta, from: weekStamp });
+
     const d = new Date(weekStart);
     d.setUTCDate(d.getUTCDate() + delta * 7);
     setWeekStart(d);
