@@ -31,6 +31,8 @@ type Props = {
   onToggleTrackDaily?: () => void;
   onToggleDay?: (index: number) => void;
   disableDayChecks?: boolean;
+  /** 0..6 (Mon..Sun). If provided, days with index > this are disabled (future). */
+  maxDayIndexAllowed?: number;
 };
 
 export default function SortableGoal(props: Props) {
@@ -49,6 +51,7 @@ export default function SortableGoal(props: Props) {
     onToggleTrackDaily,
     onToggleDay,
     disableDayChecks,
+    maxDayIndexAllowed,
   } = props;
 
   const { attributes, listeners, setNodeRef, transform, transition } =
@@ -66,6 +69,11 @@ export default function SortableGoal(props: Props) {
         : new Array(7).fill(false);
     return arr;
   }, [goal.daily]);
+
+  const dayShort = useMemo(
+    () => ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"],
+    []
+  );
 
   // inline edit state
   const [editing, setEditing] = React.useState(false);
@@ -277,29 +285,55 @@ export default function SortableGoal(props: Props) {
             )}
           </div>
 
-          {/* 7 dots */}
+          {/* 7 radio-like dots with check inside + tiny day labels */}
           {goal.trackDaily && onToggleDay && (
-            <div className="mt-2 flex flex-wrap items-center gap-1.5 md:gap-2">
+            <div className="mt-2 flex items-center gap-2">
               {daily.map((on, idx) => (
-                <button
+                <div
                   key={idx}
-                  type="button"
-                  onClick={() => onToggleDay(idx)}
-                  disabled={disableDayChecks}
-                  className={`flex h-6 w-6 items-center justify-center rounded-full border transition md:h-7 md:w-7 ${
-                    on
-                      ? "border-emerald-600 bg-emerald-600 text-white"
-                      : "border-neutral-300 bg-white text-transparent"
-                  } ${
-                    disableDayChecks
-                      ? "opacity-50 cursor-not-allowed"
-                      : "hover:brightness-95"
+                  className={`flex w-8 flex-col items-center ${
+                    disableDayChecks ? "opacity-50" : ""
                   }`}
-                  aria-pressed={on}
-                  aria-label={`Day ${idx + 1}`}
                 >
-                  <Check className="h-4 w-4" />
-                </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const futureLocked =
+                        typeof maxDayIndexAllowed === "number" &&
+                        idx > maxDayIndexAllowed;
+                      if (disableDayChecks || futureLocked) return;
+                      onToggleDay(idx);
+                    }}
+                    disabled={
+                      disableDayChecks ||
+                      (typeof maxDayIndexAllowed === "number" &&
+                        idx > maxDayIndexAllowed)
+                    }
+                    className={`flex h-6 w-6 items-center justify-center rounded-full border transition ${
+                      on
+                        ? "border-emerald-600 bg-emerald-600 text-white"
+                        : "border-neutral-300 bg-white text-transparent"
+                    } ${
+                      disableDayChecks ||
+                      (typeof maxDayIndexAllowed === "number" &&
+                        idx > maxDayIndexAllowed)
+                        ? "opacity-50 cursor-not-allowed"
+                        : "hover:brightness-95"
+                    }`}
+                    aria-pressed={on}
+                    aria-label={`${dayShort[idx]} day`}
+                    title={dayShort[idx]}
+                  >
+                    <Check className="h-4 w-4" />
+                  </button>
+                  <span
+                    className={`mt-1 text-[10px] leading-none ${
+                      on ? "text-emerald-700" : "text-neutral-500"
+                    }`}
+                  >
+                    {dayShort[idx]}
+                  </span>
+                </div>
               ))}
             </div>
           )}

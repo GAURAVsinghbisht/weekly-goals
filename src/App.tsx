@@ -594,6 +594,16 @@ export default function GoalChallengeApp() {
 
   const toggleDay = (catId: string, goalId: string, idx: number) => {
     if (isPast || isFuture) return; // progress only in current week
+
+    // For the current week, allow only today and past days
+    const isCurrentWeek = weekStart.getTime() === currentWeekStart.getTime();
+    if (isCurrentWeek) {
+      const todayIdx = Math.min(
+        6,
+        Math.max(0, Math.floor((Date.now() - weekStart.getTime()) / 86400000))
+      );
+      if (idx > todayIdx) return; // block future day clicks
+    }
     setCategories((prev) =>
       prev.map((c) => {
         if (c.id !== catId) return c;
@@ -652,6 +662,11 @@ export default function GoalChallengeApp() {
     d.setUTCDate(d.getUTCDate() + delta * 7);
     setWeekStart(d);
   };
+
+  const goToCurrentWeek = () => {
+    setWeekStart(startOfWeekKolkata());
+  };
+
   const weekLabel = useMemo(() => {
     const end = new Date(weekStart);
     end.setUTCDate(end.getUTCDate() + 6);
@@ -769,6 +784,15 @@ export default function GoalChallengeApp() {
           <div className="flex flex-wrap items-center gap-2 sm:gap-3 max-w-full">
             {tab === "goals" && (
               <>
+                {(isPast || isFuture) && (
+                  <button
+                    onClick={goToCurrentWeek}
+                    className="rounded-xl border border-neutral-300 bg-white px-3 py-2 text-sm shadow-sm hover:bg-neutral-50"
+                    title="Jump back to the current week"
+                  >
+                    ⏎ Current week
+                  </button>
+                )}
                 <button
                   onClick={() => {
                     if (!authUser) {
@@ -970,36 +994,42 @@ export default function GoalChallengeApp() {
 
             {/* Milestones */}
             {/* Current milestone summary (single card with real % complete) */}
-            <div className="mt-4">
-              {(() => {
-                const map = {
-                  brilliant: {
-                    level: "brilliant" as const,
-                    label: "Brilliant",
-                  },
-                  rock: { level: "rocking" as const, label: "You Rock" }, // component expects "rocking"
-                  right: { level: "right" as const, label: "Right Track" },
-                  improve: {
-                    level: "improve" as const,
-                    label: "Need Improvement",
-                  },
-                };
-                const m = map[milestoneLevel];
-                const pctText =
-                  totalPicked > 0
-                    ? `${completionPct}% of picked goals (${completedPicked}/${totalPicked})`
-                    : `0% — pick some goals to get started`;
+            {/* Current milestone (compact on desktop, full-width on mobile) */}
+            {(() => {
+              // make label + desc dynamic and accurate
+              const labelMap = {
+                improve: "Need Improvement",
+                right: "Right Track",
+                rock: "You Rock",
+                brilliant: "Brilliant",
+              } as const;
 
-                return (
-                  <MilestoneCard
-                    level={m.level}
-                    active={true}
-                    label={m.label}
-                    desc={pctText}
-                  />
-                );
-              })()}
-            </div>
+              // MilestoneCard uses "rocking" as its prop value, so map "rock" -> "rocking"
+              const cardLevel = (
+                milestoneLevel === "rock" ? "rocking" : milestoneLevel
+              ) as "brilliant" | "rocking" | "right" | "improve";
+
+              const desc =
+                totalPicked > 0
+                  ? `${completionPct}% of picked goals (${completedPicked}/${totalPicked})`
+                  : "No goals picked yet";
+
+              return (
+                !isFuture && (
+                  <div className="mt-4">
+                    {/* container limits width on md+ so it doesn't span the whole row */}
+                    <div className="w-full max-w-[420px]">
+                      <MilestoneCard
+                        level={cardLevel}
+                        active
+                        label={labelMap[milestoneLevel]}
+                        desc={desc}
+                      />
+                    </div>
+                  </div>
+                )
+              );
+            })()}
 
             {/* Add Category (current + future) */}
             <div className="mt-4 flex items-center gap-2">
@@ -1173,6 +1203,21 @@ export default function GoalChallengeApp() {
                                   toggleDay(cat.id, goal.id, i)
                                 }
                                 disableDayChecks={isPast || isFuture}
+                                maxDayIndexAllowed={
+                                  weekStart.getTime() ===
+                                  currentWeekStart.getTime()
+                                    ? Math.min(
+                                        6,
+                                        Math.max(
+                                          0,
+                                          Math.floor(
+                                            (Date.now() - weekStart.getTime()) /
+                                              86400000
+                                          )
+                                        )
+                                      )
+                                    : undefined
+                                }
                               />
                             ))}
                           </div>
