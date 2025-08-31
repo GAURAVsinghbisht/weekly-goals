@@ -47,6 +47,7 @@ import {
   saveWeekData,
   ensureFirebase,
   migrateLocalWeeks,
+  logEvent,
 } from "./lib/store";
 import ProfilePage from "./pages/ProfilePage";
 import AuthPage from "./pages/AuthPage";
@@ -533,6 +534,7 @@ export default function GoalChallengeApp() {
             }
       )
     );
+
   };
   const toggleCompleted = (catId: string, goalId: string) => {
     if (isPast || isFuture) return;
@@ -736,52 +738,161 @@ export default function GoalChallengeApp() {
     <div className="min-h-screen bg-[radial-gradient(1200px_600px_at_10%_0%,#eef2ff_0%,transparent_60%),radial-gradient(1200px_600px_at_90%_100%,#ecfeff_0%,transparent_60%)] bg-slate-50 p-5">
       <div className="mx-auto max-w-[1400px]">
         {/* Top Nav */}
-        <div className="mb-4 flex flex-wrap items-center justify-between gap-2">
-          <div className="flex items-center gap-2 rounded-2xl border border-neutral-300 bg-white p-1 shadow-sm">
-            <button
-              onClick={() => setTab("goals")}
-              className={`rounded-xl px-3 py-1.5 text-sm ${
-                tab === "goals" ? "bg-black text-white" : "hover:bg-neutral-100"
-              }`}
-            >
-              Goals
-            </button>
-            {/* <button
-              onClick={() => setTab("profile")}
-              className={`rounded-xl px-3 py-1.5 text-sm ${
-                tab === "profile"
-                  ? "bg-black text-white"
-                  : "hover:bg-neutral-100"
-              }`}
-            >
-              Profile
-            </button> */}
-
-            <button
-              onClick={() => setTab("dashboard")}
-              className={`rounded-xl px-3 py-1.5 text-sm ${
-                tab === "dashboard"
-                  ? "bg-black text-white"
-                  : "hover:bg-neutral-100"
-              }`}
-            >
-              Dashboard
-            </button>
-
-            {/* {!authUser && (
+        {/* Top Nav (responsive) */}
+        <div className="mb-4 flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
+          {/* Row 1 (mobile): Tabs left, auth right — same line/height */}
+          <div className="flex items-center justify-between">
+            {/* Tabs (unchanged) */}
+            <div className="flex items-center gap-2 rounded-2xl border border-neutral-300 bg-white p-1 shadow-sm">
               <button
-                onClick={() => setTab("auth")}
+                onClick={() => setTab("goals")}
                 className={`rounded-xl px-3 py-1.5 text-sm ${
-                  tab === "auth"
+                  tab === "goals"
                     ? "bg-black text-white"
                     : "hover:bg-neutral-100"
                 }`}
               >
-                Account
+                Goals
               </button>
-            )} */}
+              <button
+                onClick={() => setTab("dashboard")}
+                className={`rounded-xl px-3 py-1.5 text-sm ${
+                  tab === "dashboard"
+                    ? "bg-black text-white"
+                    : "hover:bg-neutral-100"
+                }`}
+              >
+                Dashboard
+              </button>
+            </div>
+
+            {/* Auth block — show here on mobile only */}
+            <div className="md:hidden flex items-center gap-2">
+              {authUser ? (
+                <>
+                  <div className="relative group shrink-0">
+                    <button
+                      onClick={() => setTab("profile")}
+                      className="relative inline-flex h-9 w-9 items-center justify-center overflow-hidden rounded-full border border-neutral-300 bg-white shadow-sm hover:ring-2 hover:ring-neutral-200"
+                      title="Open profile"
+                    >
+                      {avatarUrl ? (
+                        <img
+                          src={avatarUrl}
+                          alt="User avatar"
+                          className="h-full w-full object-cover"
+                        />
+                      ) : (
+                        <User className="h-5 w-5 text-neutral-600" />
+                      )}
+                    </button>
+                    {/* hover tooltip */}
+                    <div className="pointer-events-none absolute right-0 z-50 mt-2 w-60 translate-y-1 opacity-0 transition-all duration-150 group-hover:translate-y-0 group-hover:opacity-100">
+                      <div className="rounded-xl border border-neutral-200 bg-white p-3 text-xs shadow-lg">
+                        <div className="font-medium text-neutral-900">
+                          {authUser.displayName || "User"}
+                        </div>
+                        <div className="mt-0.5 text-neutral-600">
+                          {authUser.email}
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+
+                  <button
+                    onClick={() => {
+                      signOut(getAuth());
+                      setTab("goals");
+                    }}
+                    className="shrink-0 rounded-xl border border-neutral-300 bg-white px-3 py-1.5 text-xs shadow-sm hover:bg-neutral-50"
+                  >
+                    Sign out
+                  </button>
+                </>
+              ) : (
+                <div className="relative group shrink-0">
+                  <button
+                    onClick={() => setTab("auth")}
+                    className="relative inline-flex h-9 w-9 items-center justify-center overflow-hidden rounded-full border border-neutral-300 bg-white shadow-sm hover:ring-2 hover:ring-neutral-200"
+                    title="Sign in"
+                  >
+                    <User className="h-5 w-5 text-neutral-600" />
+                  </button>
+                  {/* hover tooltip */}
+                  <div className="pointer-events-none absolute right-0 z-50 mt-2 w-44 translate-y-1 opacity-0 transition-all duration-150 group-hover:translate-y-0 group-hover:opacity-100">
+                    <div className="rounded-xl border border-neutral-200 bg-white p-3 text-xs shadow-lg">
+                      <div className="font-medium text-neutral-900">
+                        Sign in
+                      </div>
+                      <div className="mt-0.5 text-neutral-600">
+                        Click to log in
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              )}
+            </div>
           </div>
-          <div className="flex flex-wrap items-center gap-2 sm:gap-3 max-w-full">
+
+          {/* Row 2 (mobile): "Current week" button */}
+          {tab === "goals" && (isPast || isFuture) && (
+            <div className="md:hidden">
+              <button
+                onClick={goToCurrentWeek}
+                className="w-full rounded-xl border border-neutral-300 bg-white px-3 py-2 text-sm shadow-sm hover:bg-neutral-50"
+                title="Jump back to the current week"
+              >
+                ⏎ Current week
+              </button>
+            </div>
+          )}
+
+          {/* Row 3 (mobile): Prev / Date / Next in one row */}
+          {tab === "goals" && (
+            <div className="md:hidden flex items-center gap-2 sm:gap-3 max-w-full">
+              <button
+                onClick={() => {
+                  if (!authUser) {
+                    setGateOpen(true);
+                    return;
+                  }
+                  if (!prevWouldBeBeforeCreation) shiftWeek(-1);
+                }}
+                disabled={!!authUser && prevWouldBeBeforeCreation}
+                title={
+                  authUser && prevWouldBeBeforeCreation
+                    ? "No records exist before your account was created."
+                    : undefined
+                }
+                className="rounded-xl border border-neutral-300 bg-white px-3 py-1.5 text-xs shadow-sm hover:bg-neutral-50 disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                ◀ Prev
+              </button>
+
+              <div className="flex items-center gap-2 rounded-xl border border-neutral-300 bg-white px-3 py-2 text-sm shadow-sm">
+                <CalendarDays className="h-4 w-4" />
+                <span className="tabular-nums whitespace-nowrap">
+                  {weekLabel}
+                </span>
+              </div>
+
+              <button
+                onClick={() => {
+                  if (!authUser) {
+                    setGateOpen(true);
+                    return;
+                  }
+                  shiftWeek(1);
+                }}
+                className="rounded-xl border border-neutral-300 bg-white px-3 py-1.5 text-xs shadow-sm hover:bg-neutral-50"
+              >
+                Next ▶
+              </button>
+            </div>
+          )}
+
+          {/* Desktop / tablet: original right-side (nav + auth) */}
+          <div className="hidden md:flex flex-wrap items-center gap-2 sm:gap-3 max-w-full">
             {tab === "goals" && (
               <>
                 {(isPast || isFuture) && (
@@ -793,6 +904,7 @@ export default function GoalChallengeApp() {
                     ⏎ Current week
                   </button>
                 )}
+
                 <button
                   onClick={() => {
                     if (!authUser) {
@@ -807,7 +919,7 @@ export default function GoalChallengeApp() {
                       ? "No records exist before your account was created."
                       : undefined
                   }
-                  className="rounded-xl border ... px-3 py-1.5 text-xs sm:text-sm ..."
+                  className="rounded-xl border border-neutral-300 bg-white px-3 py-2 text-sm shadow-sm hover:bg-neutral-50 disabled:opacity-50 disabled:cursor-not-allowed"
                 >
                   ◀ Prev
                 </button>
@@ -827,12 +939,14 @@ export default function GoalChallengeApp() {
                     }
                     shiftWeek(1);
                   }}
-                  className="rounded-xl border ... px-3 py-1.5 text-xs sm:text-sm ..."
+                  className="rounded-xl border border-neutral-300 bg-white px-3 py-2 text-sm shadow-sm hover:bg-neutral-50"
                 >
                   Next ▶
                 </button>
               </>
             )}
+
+            {/* Auth block (desktop) */}
             {authUser ? (
               <>
                 <div className="relative group ml-2 shrink-0">
@@ -851,7 +965,6 @@ export default function GoalChallengeApp() {
                       <User className="h-5 w-5 text-neutral-600" />
                     )}
                   </button>
-
                   {/* hover tooltip */}
                   <div className="pointer-events-none absolute right-0 z-50 mt-2 w-60 translate-y-1 opacity-0 transition-all duration-150 group-hover:translate-y-0 group-hover:opacity-100">
                     <div className="rounded-xl border border-neutral-200 bg-white p-3 text-xs shadow-lg">
@@ -868,9 +981,10 @@ export default function GoalChallengeApp() {
                 <button
                   onClick={() => {
                     signOut(getAuth());
+                    goToCurrentWeek();
                     setTab("goals");
                   }}
-                  className="ml-2 shrink-0 rounded-xl border ... px-3 py-1.5 text-xs ..."
+                  className="ml-2 shrink-0 rounded-xl border border-neutral-300 bg-white px-3 py-1.5 text-xs shadow-sm hover:bg-neutral-50"
                 >
                   Sign out
                 </button>
@@ -884,7 +998,6 @@ export default function GoalChallengeApp() {
                 >
                   <User className="h-5 w-5 text-neutral-600" />
                 </button>
-
                 {/* hover tooltip */}
                 <div className="pointer-events-none absolute right-0 z-50 mt-2 w-44 translate-y-1 opacity-0 transition-all duration-150 group-hover:translate-y-0 group-hover:opacity-100">
                   <div className="rounded-xl border border-neutral-200 bg-white p-3 text-xs shadow-lg">
@@ -1317,9 +1430,7 @@ export default function GoalChallengeApp() {
         )}
 
         <div className="mt-10 text-center text-xs text-neutral-500">
-          Week starts on <span className="font-medium">Monday</span>. Your
-          progress is saved per week — in the cloud when Firebase is configured,
-          otherwise locally on this device.
+          Week starts on <span className="font-medium">Monday</span>.
         </div>
       </div>
 

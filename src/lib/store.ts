@@ -169,7 +169,11 @@ export async function loadWeekData(
   return freshWeekTemplate();
 }
 
-export async function saveWeekData(profileId: string, weekStamp: string, categories: Category[]) {
+export async function saveWeekData(
+  profileId: string,
+  weekStamp: string,
+  categories: Category[]
+) {
   const { db } = ensureFirebase();
   if (db) {
     try {
@@ -228,6 +232,28 @@ export async function migrateLocalWeeks(profileId: string) {
   }
 
   localStorage.setItem(flagKey, "1");
+}
+
+// Lightweight event logger (safe if Firestore not configured)
+export async function logEvent(
+  profileId: string,
+  weekStamp: string,
+  type: string,
+  extra?: any
+) {
+  const { db } = ensureFirebase();
+  if (!db) return;
+  try {
+    await addDoc(collection(db, "events"), {
+      profileId,
+      weekStamp,
+      type,
+      extra: extra ?? null,
+      createdAt: serverTimestamp(),
+    } as any);
+  } catch {
+    /* ignore */
+  }
 }
 
 // ===== Weekly AI Report persistence (Firestore) =====
