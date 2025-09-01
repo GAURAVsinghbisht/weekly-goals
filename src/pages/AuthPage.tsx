@@ -117,8 +117,6 @@ export default function AuthPage({ onSignedIn }: { onSignedIn?: () => void }) {
     try {
       let prov;
       if (provider === "google") prov = new GoogleAuthProvider();
-      if (provider === "facebook") prov = new FacebookAuthProvider();
-      if (provider === "github") prov = new GithubAuthProvider();
       const cred = await signInWithPopup(auth, prov!);
       await afterAuth(cred.user);
     } catch (e: any) {
