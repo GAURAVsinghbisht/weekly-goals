@@ -1,21 +1,65 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
-import { DndContext, DragEndEvent, PointerSensor, useSensor, useSensors } from "@dnd-kit/core";
-import { SortableContext, arrayMove, verticalListSortingStrategy } from "@dnd-kit/sortable";
-import { CalendarDays, CheckCircle2, Lock, CalendarClock, Rocket, Sparkles, Trophy, Plus } from "lucide-react";
+import {
+  DndContext,
+  DragEndEvent,
+  PointerSensor,
+  useSensor,
+  useSensors,
+} from "@dnd-kit/core";
+import {
+  SortableContext,
+  arrayMove,
+  verticalListSortingStrategy,
+} from "@dnd-kit/sortable";
+// replace your existing lucide-react import with this
+import {
+  CalendarDays,
+  CheckCircle2,
+  Lock,
+  CalendarClock,
+  Rocket,
+  Sparkles,
+  Trophy,
+  Plus,
+  User,
+  Pencil,
+  Trash2,
+  Check,
+  X,
+} from "lucide-react";
 
 import Toast from "./components/Toast";
 import ConfirmDialog from "./components/ConfirmDialog";
 import MilestoneCard from "./components/MilestoneCard";
 import SortableGoal from "./components/SortableGoal";
 
-import { startOfWeekKolkata, fmtDateUTCYYYYMMDD, paletteFor, Category } from "./lib/core";
-import { loadWeekData, saveWeekData, ensureFirebase } from "./lib/store";
+// was: import { startOfWeekKolkata, fmtDateUTCYYYYMMDD, paletteFor, Category } from "./lib/core";
+import {
+  startOfWeekKolkata,
+  fmtDateUTCYYYYMMDD,
+  paletteFor,
+  Category,
+  type PaletteKey,
+} from "./lib/core";
+
+import {
+  loadWeekData,
+  saveWeekData,
+  ensureFirebase,
+  migrateLocalWeeks,
+  logEvent,
+} from "./lib/store";
 import ProfilePage from "./pages/ProfilePage";
 import AuthPage from "./pages/AuthPage";
-import { getAuth, onAuthStateChanged, signOut } from "firebase/auth";
+import DashboardPage from "./pages/DashboardPage";
+import { generateAIReport } from "./lib/report";
 
+import { getAuth, onAuthStateChanged, signOut } from "firebase/auth";
+import { doc, getDoc } from "firebase/firestore";
 export default function GoalChallengeApp() {
-  const [tab, setTab] = useState<"goals" | "profile" | "auth">("goals");
+  const [tab, setTab] = useState<"goals" | "profile" | "auth" | "dashboard">(
+    "goals"
+  );
 
   // Auth state
   const [authUser, setAuthUser] = useState<any>(null);
@@ -29,6 +73,13 @@ export default function GoalChallengeApp() {
     localStorage.setItem(profileIdKey, id);
     return id;
   });
+
+  useEffect(() => {
+    if (!profileId) return;
+    migrateLocalWeeks(profileId).catch((e) =>
+      console.warn("migration failed", e)
+    );
+  }, [profileId]);
 
   // Wire Firebase Auth listener
   useEffect(() => {
@@ -58,16 +109,184 @@ export default function GoalChallengeApp() {
   const hydratingRef = useRef(false);
   const saveTimer = useRef<number | undefined>();
 
-  const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 6 } }));
+  // === Week access gating ===
+
+  // Monday 00:00 IST (Kolkata) for any given date
+  function startOfWeekIST(d: Date) {
+    // shift to IST, find Monday, then shift back to UTC
+    const IST_OFFSET_MS = 5.5 * 60 * 60 * 1000;
+    const ist = new Date(d.getTime() + IST_OFFSET_MS);
+    const dow = ist.getUTCDay(); // 0..6 (Sun..Sat)
+    const delta = (dow + 6) % 7; // days since Monday
+    ist.setUTCHours(0, 0, 0, 0);
+    ist.setUTCDate(ist.getUTCDate() - delta);
+    return new Date(ist.getTime() - IST_OFFSET_MS);
+  }
+
+  // First-seen/account-created date
+  const accountCreatedAt = useMemo(() => {
+    if (authUser?.metadata?.creationTime) {
+      return new Date(authUser.metadata.creationTime);
+    }
+    // durable first-seen for anonymous users (doesn't block; used for tooltip copy fallback)
+    const key = "goal-challenge:firstSeen";
+    const ex = localStorage.getItem(key);
+    if (ex) return new Date(ex);
+    const now = new Date();
+    localStorage.setItem(key, now.toISOString());
+    return now;
+  }, [authUser]);
+
+  // Earliest allowed week (Monday IST of creation/first-seen)
+  const creationWeekStart = useMemo(
+    () => startOfWeekIST(accountCreatedAt),
+    [accountCreatedAt]
+  );
+
+  // Is clicking "Prev" going earlier than creation week? (only matters when signed in)
+  const prevWouldBeBeforeCreation = useMemo(() => {
+    const prev = new Date(weekStart);
+    prev.setUTCDate(prev.getUTCDate() - 7);
+    return !!authUser && prev < creationWeekStart;
+  }, [authUser, weekStart, creationWeekStart]);
+
+  // Modal for logged-out users who click past/future
+  const [gateOpen, setGateOpen] = useState(false);
+
+  // ---- Category management state ----
+  const genId = () =>
+    crypto.randomUUID?.() || Math.random().toString(36).slice(2, 9);
+  const [newCatName, setNewCatName] = useState("");
+  const [renamingCatId, setRenamingCatId] = useState<string | null>(null);
+  const [renameText, setRenameText] = useState("");
+
+  const canAddCategory = !isPast; // current + future
+  const canRenameDeleteCategory = !isPast && !isFuture; // current only
+  const catNameValid = canAddCategory && newCatName.trim().length > 0;
+
+  const addCategory = () => {
+    if (!canAddCategory) return;
+    const name = newCatName.trim();
+    if (!name) return; // prevent empty/whitespace names
+    const colorKey = aiColorKeyForCategory(name);
+    setCategories((prev) => [
+      ...prev,
+      { id: genId(), name, goals: [], colorKey },
+    ]);
+    setNewCatName("");
+  };
+
+  const startRenameCategory = (catId: string, current: string) => {
+    if (!canRenameDeleteCategory) return;
+    setRenamingCatId(catId);
+    setRenameText(current);
+  };
+
+  const commitRenameCategory = () => {
+    if (!canRenameDeleteCategory || !renamingCatId) return;
+    const name = renameText.trim();
+    if (!name) {
+      setRenamingCatId(null);
+      return;
+    }
+
+    const colorKey = aiColorKeyForCategory(name); // ⬇️ NEW
+    setCategories((prev) =>
+      prev.map((c) => (c.id === renamingCatId ? { ...c, name, colorKey } : c))
+    );
+    setRenamingCatId(null);
+  };
+
+  const renameCategory = (catId: string, newName: string) => {
+    if (isPast) return; // no edits in the past
+    const name = (newName || "").trim();
+    if (!name) return;
+    setCategories((prev) =>
+      prev.map((c) => (c.id === catId ? { ...c, name } : c))
+    );
+  };
+
+  const cancelRenameCategory = () => {
+    setRenamingCatId(null);
+    setRenameText("");
+  };
+
+  const deleteCategory = (catId: string) => {
+    if (isPast) return; // no edits in the past
+    if (categories.length <= 1) {
+      // nice toast instead of deleting the last category
+      setToast({
+        show: true,
+        title: "You need at least one category.",
+        subtitle: "Cannot delete the last category.",
+      });
+      return;
+    }
+    setCategories((prev) => prev.filter((c) => c.id !== catId));
+  };
+  // Extend confirm dialog to also handle category deletion (not only goals)
+  const requestDeleteCategory = (catId: string, title: string) => {
+    if (!canRenameDeleteCategory) return;
+    if (categories.length <= 1) {
+      setToast({
+        show: true,
+        title: "Can't delete the last category",
+        subtitle: "At least one category is required.",
+      });
+      return;
+    }
+    setConfirmDel({ open: true, catId, title });
+  };
+
+  // ⬇️ NEW: lightweight “AI” color guesser (keyword-based, runs offline)
+  function aiColorKeyForCategory(name: string): PaletteKey {
+    const n = (name || "").toLowerCase();
+
+    if (/(health|fit|workout|yoga|diet|gym|run|meditat|wellness)/.test(n))
+      return "emerald";
+    if (/(relationship|love|family|friends|social|romance|partner)/.test(n))
+      return "rose";
+    if (/(finance|money|budget|invest|wealth|saving|expense)/.test(n))
+      return "teal";
+    if (
+      /(career|work|job|startup|project|code|study|learn|education|school)/.test(
+        n
+      )
+    )
+      return "indigo";
+    if (/(mind|mental|spirit|faith|gratitude|journal|peace)/.test(n))
+      return "violet";
+    if (/(travel|adventure|outdoor|hike|nature|trip)/.test(n)) return "amber";
+    if (/(home|clean|organize|chores|garden|cook|meal|house)/.test(n))
+      return "lime";
+    if (/(creative|art|music|paint|write|drawing|design)/.test(n))
+      return "fuchsia";
+
+    // sensible default
+    return "sky";
+  }
+
+  const sensors = useSensors(
+    useSensor(PointerSensor, { activationConstraint: { distance: 6 } })
+  );
 
   // Pretty confirm dialog state & helpers
-  const [confirmDel, setConfirmDel] = useState<{ open: boolean; catId?: string; goalId?: string; title?: string }>({ open: false });
+  const [confirmDel, setConfirmDel] = useState<{
+    open: boolean;
+    catId?: string;
+    goalId?: string;
+    title?: string;
+  }>({ open: false });
   const requestDelete = (catId: string, goalId: string, title: string) => {
     if (isPast) return; // safety
     setConfirmDel({ open: true, catId, goalId, title });
   };
   const confirmDelete = () => {
-    if (confirmDel.catId && confirmDel.goalId) deleteGoal(confirmDel.catId, confirmDel.goalId);
+    if (confirmDel.catId && confirmDel.goalId) {
+      deleteGoal(confirmDel.catId, confirmDel.goalId);
+    } else if (confirmDel.catId && !confirmDel.goalId) {
+      deleteCategory(confirmDel.catId);
+    }
     setConfirmDel({ open: false });
   };
 
@@ -76,37 +295,94 @@ export default function GoalChallengeApp() {
   const addGoal = (catId: string, title: string) => {
     if (isPast) return; // no edits in the past
     if (!title) return;
-    setCategories(prev => prev.map(c => c.id !== catId ? c : ({
-      ...c,
-      goals: [...c.goals, { id: crypto.randomUUID?.() || Math.random().toString(36).slice(2,9), title, picked: false, completed: false }]
-    })));
-    setNewGoalText(prev => ({ ...prev, [catId]: '' }));
+    logEvent(profileId, weekStamp, "goal_add", { catId, title });
+    setCategories((prev) =>
+      prev.map((c) =>
+        c.id !== catId
+          ? c
+          : {
+              ...c,
+              goals: [
+                ...c.goals,
+                {
+                  id:
+                    crypto.randomUUID?.() ||
+                    Math.random().toString(36).slice(2, 9),
+                  title,
+                  picked: false,
+                  completed: false,
+                },
+              ],
+            }
+      )
+    );
+    setNewGoalText((prev) => ({ ...prev, [catId]: "" }));
   };
   const renameGoal = (catId: string, goalId: string, newTitle: string) => {
     if (isPast) return; // no edits in the past
-    setCategories(prev => prev.map(c => c.id !== catId ? c : ({
-      ...c,
-      goals: c.goals.map(g => g.id !== goalId ? g : ({ ...g, title: newTitle }))
-    })));
+    logEvent(profileId, weekStamp, "goal_rename", { catId, goalId, newTitle });
+    setCategories((prev) =>
+      prev.map((c) =>
+        c.id !== catId
+          ? c
+          : {
+              ...c,
+              goals: c.goals.map((g) =>
+                g.id !== goalId ? g : { ...g, title: newTitle }
+              ),
+            }
+      )
+    );
   };
   const duplicateGoal = (catId: string, goalId: string) => {
     if (isPast) return; // no edits in the past
-    setCategories(prev => prev.map(c => {
-      if (c.id !== catId) return c;
-      const g = c.goals.find(x => x.id === goalId);
-      if (!g) return c;
-      return {
-        ...c,
-        goals: [...c.goals, { id: crypto.randomUUID?.() || Math.random().toString(36).slice(2,9), title: g.title + " (copy)", picked: false, completed: false }]
-      };
-    }));
+
+    setCategories((prev) =>
+      prev.map((c) => {
+        if (c.id !== catId) return c;
+        const g = c.goals.find((x) => x.id === goalId);
+        if (!g) return c;
+        logEvent(profileId, weekStamp, "goal_duplicate", {
+          catId,
+          goalId,
+          title: g?.title || "",
+        });
+        return {
+          ...c,
+          goals: [
+            ...c.goals,
+            {
+              id:
+                crypto.randomUUID?.() || Math.random().toString(36).slice(2, 9),
+              title: g.title + " (copy)",
+              picked: false,
+              completed: false,
+            },
+          ],
+        };
+      })
+    );
   };
   const deleteGoal = (catId: string, goalId: string) => {
     if (isPast) return; // no edits in the past
-    setCategories(prev => prev.map(c => c.id !== catId ? c : ({
-      ...c,
-      goals: c.goals.filter(g => g.id !== goalId)
-    })));
+    const g = categories
+      .find((c) => c.id === catId)
+      ?.goals.find((x) => x.id === goalId);
+    logEvent(profileId, weekStamp, "goal_delete", {
+      catId,
+      goalId,
+      title: g?.title || "",
+    });
+    setCategories((prev) =>
+      prev.map((c) =>
+        c.id !== catId
+          ? c
+          : {
+              ...c,
+              goals: c.goals.filter((g) => g.id !== goalId),
+            }
+      )
+    );
   };
 
   // Load week from storage/Firestore whenever week changes OR profile changes
@@ -119,12 +395,16 @@ export default function GoalChallengeApp() {
         const data = await loadWeekData(profileId, weekStamp);
         if (!alive) return;
         setCategories(data);
+        // log: user opened this week
+        logEvent(profileId, weekStamp, "open_week");
       } finally {
         hydratingRef.current = false;
         setLoadingWeek(false);
       }
     })();
-    return () => { alive = false; };
+    return () => {
+      alive = false;
+    };
   }, [profileId, weekStamp]);
 
   // Save week to storage/Firestore when categories change (but not while hydrating)
@@ -134,86 +414,634 @@ export default function GoalChallengeApp() {
     saveTimer.current = window.setTimeout(() => {
       saveWeekData(profileId, weekStamp, categories);
     }, 300);
-    return () => { if (saveTimer.current) window.clearTimeout(saveTimer.current); };
+    return () => {
+      if (saveTimer.current) window.clearTimeout(saveTimer.current);
+    };
   }, [categories, profileId, weekStamp]);
 
   // Stats & Milestones
-  const achievedPerCategory = categories.map(c => c.goals.filter(g => g.completed).length >= 2);
-  const achievedCount = achievedPerCategory.filter(Boolean).length;
-  const milestoneLevel = achievedCount === 6 ? "brilliant" : achievedCount >= 4 ? "rocking" : achievedCount >= 2 ? "right" : "none";
-  const prevLevel = useRef<string>("none");
-  const [toast, setToast] = useState<{ show: boolean; title: string; subtitle?: string }>({ show: false, title: "", subtitle: "" });
+  // const achievedPerCategory = categories.map(
+  //   (c) => c.goals.filter((g) => g.completed).length >= 2
+  // );
+  // const achievedCount = achievedPerCategory.filter(Boolean).length;
+  // const milestoneLevel =
+  //   achievedCount === 6
+  //     ? "brilliant"
+  //     : achievedCount >= 4
+  //     ? "rocking"
+  //     : achievedCount >= 2
+  //     ? "right"
+  //     : "none";
+
+  // const prevLevel = useRef<string>("none");
+  // const [toast, setToast] = useState<{
+  //   show: boolean;
+  //   title: string;
+  //   subtitle?: string;
+  // }>({ show: false, title: "", subtitle: "" });
+  // useEffect(() => {
+  //   if (
+  //     !isPast &&
+  //     milestoneLevel !== "none" &&
+  //     milestoneLevel !== prevLevel.current
+  //   ) {
+  //     prevLevel.current = milestoneLevel;
+  //     const map = {
+  //       right: {
+  //         title: "You're on the right track!",
+  //         sub: "2 categories done. Keep the momentum!",
+  //       },
+  //       rocking: {
+  //         title: "You're rocking it!",
+  //         sub: "2 goals in 4+ categories. Outstanding!",
+  //       },
+  //       brilliant: {
+  //         title: "Brilliant week!",
+  //         sub: "2 goals in every category. You're unstoppable!",
+  //       },
+  //     } as const;
+  //     const m = map[milestoneLevel as keyof typeof map];
+  //     setToast({ show: true, title: m.title, subtitle: m.sub });
+  //   }
+  // }, [milestoneLevel, isPast]);
+
+  // ---- Percentage-based milestones over *picked* goals ----
+  const totalPicked = categories.reduce(
+    (acc, c) => acc + c.goals.filter((g) => g.picked).length,
+    0
+  );
+  const completedPicked = categories.reduce(
+    (acc, c) => acc + c.goals.filter((g) => g.picked && g.completed).length,
+    0
+  );
+  const completionPct =
+    totalPicked > 0 ? Math.round((completedPicked / totalPicked) * 100) : 0;
+
+  type Band = "improve" | "right" | "rock" | "brilliant";
+  const bandFromPct = (p: number): Band =>
+    p >= 80 ? "brilliant" : p >= 50 ? "rock" : p >= 20 ? "right" : "improve";
+  const milestoneLevel = bandFromPct(completionPct);
+
+  const prevLevel = useRef<Band>("improve");
+  const [toast, setToast] = useState<{
+    show: boolean;
+    title: string;
+    subtitle?: string;
+  }>({ show: false, title: "", subtitle: "" });
+
   useEffect(() => {
-    if (!isPast && milestoneLevel !== "none" && milestoneLevel !== prevLevel.current) {
+    if (isPast) return;
+    if (milestoneLevel !== prevLevel.current) {
+      // Only celebrate when moving to a higher band
+      const rank: Record<Band, number> = {
+        improve: 0,
+        right: 1,
+        rock: 2,
+        brilliant: 3,
+      };
+      if (rank[milestoneLevel] > rank[prevLevel.current]) {
+        const map: Record<Band, { title: string; sub: string }> = {
+          improve: { title: "Keep going!", sub: "Every small step counts." },
+          right: {
+            title: "You're on the right track!",
+            sub: "Nice momentum—keep it up!",
+          },
+          rock: { title: "You rock!", sub: "Over 50% done. Great pace!" },
+          brilliant: {
+            title: "Brilliant week!",
+            sub: "80%+ complete. You're unstoppable!",
+          },
+        };
+        const m = map[milestoneLevel];
+        setToast({ show: true, title: m.title, subtitle: m.sub });
+      }
       prevLevel.current = milestoneLevel;
-      const map = { right: { title: "You're on the right track!", sub: "2 categories done. Keep the momentum!" }, rocking: { title: "You're rocking it!", sub: "2 goals in 4+ categories. Outstanding!" }, brilliant: { title: "Brilliant week!", sub: "2 goals in every category. You're unstoppable!" }, } as const;
-      const m = map[milestoneLevel as keyof typeof map];
-      setToast({ show: true, title: m.title, subtitle: m.sub });
     }
   }, [milestoneLevel, isPast]);
 
   // Handlers with time-guard rules
   const onDragEnd = (e: DragEndEvent) => {
     if (isPast) return; // past weeks are read-only
-    const { active, over } = e; if (!over || active.id === over.id) return;
-    const findCatByGoal = (goalId: string) => categories.find(c => c.goals.some(g => g.id === goalId));
-    const srcCat = findCatByGoal(String(active.id)); const dstCat = findCatByGoal(String(over.id));
+    const { active, over } = e;
+    if (!over || active.id === over.id) return;
+    const findCatByGoal = (goalId: string) =>
+      categories.find((c) => c.goals.some((g) => g.id === goalId));
+    const srcCat = findCatByGoal(String(active.id));
+    const dstCat = findCatByGoal(String(over.id));
     if (!srcCat || !dstCat || srcCat.id !== dstCat.id) return;
-    const catIdx = categories.findIndex(c => c.id === srcCat.id);
-    const srcGoals = srcCat.goals; const oldIndex = srcGoals.findIndex(g => g.id === active.id); const newIndex = srcGoals.findIndex(g => g.id === over.id);
+    const catIdx = categories.findIndex((c) => c.id === srcCat.id);
+    const srcGoals = srcCat.goals;
+    const oldIndex = srcGoals.findIndex((g) => g.id === active.id);
+    const newIndex = srcGoals.findIndex((g) => g.id === over.id);
     const newGoals = arrayMove(srcGoals, oldIndex, newIndex);
-    const next = [...categories]; next[catIdx] = { ...srcCat, goals: newGoals }; setCategories(next);
+    const next = [...categories];
+    next[catIdx] = { ...srcCat, goals: newGoals };
+    setCategories(next);
   };
-  const togglePicked = (catId: string, goalId: string) => { if (isPast) return; setCategories(prev => prev.map(c => c.id !== catId ? c : ({ ...c, goals: c.goals.map(g => g.id !== goalId ? g : ({ ...g, picked: !g.picked })) }))); };
+  const togglePicked = (catId: string, goalId: string) => {
+    if (isPast) return;
+    const cat = categories.find((c) => c.id === catId);
+    const goal = cat?.goals.find((g) => g.id === goalId);
+    const willPick = goal ? !goal.picked : false;
+    logEvent(profileId, weekStamp, willPick ? "pick_on" : "pick_off", {
+      catId,
+      goalId,
+      title: goal?.title || "",
+    });
+
+    setCategories((prev) =>
+      prev.map((c) =>
+        c.id !== catId
+          ? c
+          : {
+              ...c,
+              goals: c.goals.map((g) =>
+                g.id !== goalId ? g : { ...g, picked: !g.picked }
+              ),
+            }
+      )
+    );
+  };
   const toggleCompleted = (catId: string, goalId: string) => {
     if (isPast || isFuture) return;
-    const cat = categories.find(c => c.id === catId);
-    const goal = cat?.goals.find(g => g.id === goalId);
+    const cat = categories.find((c) => c.id === catId);
+    const goal = cat?.goals.find((g) => g.id === goalId);
+    if (goal?.trackDaily) return; // completion is derived from daily dots
+
     const willComplete = !!goal && !goal.completed;
     const goalTitle = goal?.title || "Goal";
     const catName = cat?.name || "";
-    setCategories(prev => prev.map(c => c.id !== catId ? c : ({
-      ...c,
-      goals: c.goals.map(g => g.id !== goalId ? g : ({ ...g, completed: !g.completed }))
-    })));
+
+    logEvent(profileId, weekStamp, willComplete ? "completed" : "uncompleted", {
+      catId,
+      goalId,
+      title: goalTitle,
+    });
+    setCategories((prev) =>
+      prev.map((c) =>
+        c.id !== catId
+          ? c
+          : {
+              ...c,
+              goals: c.goals.map((g) =>
+                g.id !== goalId ? g : { ...g, completed: !g.completed }
+              ),
+            }
+      )
+    );
     if (willComplete) {
-      setToast({ show: true, title: "Nice! Task completed", subtitle: catName ? `${goalTitle} — ${catName}` : goalTitle });
+      setToast({
+        show: true,
+        title: "Nice! Task completed",
+        subtitle: catName ? `${goalTitle} — ${catName}` : goalTitle,
+      });
     }
   };
 
-  const shiftWeek = (delta: number) => { const d = new Date(weekStart); d.setUTCDate(d.getUTCDate() + delta * 7); setWeekStart(d); };
-  const weekLabel = useMemo(() => { const end = new Date(weekStart); end.setUTCDate(end.getUTCDate() + 6); const intl = new Intl.DateTimeFormat("en-GB", { month: "short", day: "2-digit" }); return `${intl.format(weekStart)} → ${intl.format(end)}`; }, [weekStart]);
+  // --- Daily-tracking helpers ---
+  const ensureDaily = (arr?: boolean[]) =>
+    Array.isArray(arr) && arr.length === 7
+      ? arr.slice()
+      : new Array(7).fill(false);
+  const isSeven = (arr?: boolean[]) =>
+    Array.isArray(arr) && arr.filter(Boolean).length === 7;
 
-  const modeInfo = isPast ? { text: "Past week — read only", color: "bg-neutral-800", icon: <Lock className="h-4 w-4" /> } : isFuture ? { text: "Future week — picking only (no completion)", color: "bg-indigo-600", icon: <CalendarClock className="h-4 w-4" /> } : { text: "Current week — full access", color: "bg-emerald-600", icon: <CheckCircle2 className="h-4 w-4 text-white" /> };
+  const toggleTrackDaily = (catId: string, goalId: string) => {
+    if (isPast) return; // no edits in past
+    setCategories((prev) =>
+      prev.map((c) => {
+        if (c.id !== catId) return c;
+        return {
+          ...c,
+          goals: c.goals.map((g) => {
+            if (g.id !== goalId) return g;
+            const nextTrack = !g.trackDaily;
+            const daily = ensureDaily(g.daily);
+            // If turning ON and already 7/7, Completed should reflect it
+            const completed = nextTrack ? isSeven(daily) : g.completed;
+            return { ...g, trackDaily: nextTrack, daily, completed };
+          }),
+        };
+      })
+    );
+  };
+
+  const toggleDay = (catId: string, goalId: string, idx: number) => {
+    if (isPast || isFuture) return; // progress only in current week
+
+    // For the current week, allow only today and past days
+    const isCurrentWeek = weekStart.getTime() === currentWeekStart.getTime();
+    if (isCurrentWeek) {
+      const todayIdx = Math.min(
+        6,
+        Math.max(0, Math.floor((Date.now() - weekStart.getTime()) / 86400000))
+      );
+      if (idx > todayIdx) return; // block future day clicks
+    }
+    setCategories((prev) =>
+      prev.map((c) => {
+        if (c.id !== catId) return c;
+        return {
+          ...c,
+          goals: c.goals.map((g) => {
+            if (g.id !== goalId) return g;
+            const daily = ensureDaily(g.daily);
+            const wasOn = !!daily[idx];
+            daily[idx] = !daily[idx];
+
+            // short motivating toast when a single day is ticked
+            const turnedOn = !wasOn && daily[idx];
+            const dayName = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"][
+              idx
+            ];
+            // (We’ll avoid double toast when the 7th check also completes the streak)
+            if (turnedOn && !isSeven(daily)) {
+              const goalTitle = g.title || "Goal";
+              const catName = c.name || "";
+              setToast({
+                show: true,
+                title: `Nice! ${dayName} done`,
+                subtitle: catName ? `${goalTitle} — ${catName}` : goalTitle,
+              });
+            }
+
+            // 1) Auto-pick if any day turned on (never auto-unpick)
+            const picked = g.picked || (!wasOn && daily[idx]);
+
+            // 2) Completed mirrors 7/7 only when tracking is ON (auto-check & auto-uncheck)
+            let completed = g.completed;
+            if (g.trackDaily) {
+              const nowSeven = isSeven(daily);
+              if (nowSeven && !completed) {
+                completed = true;
+                setToast({
+                  show: true,
+                  title: "Daily streak complete!",
+                  subtitle: `${g.title || "Goal"} — 7/7`,
+                });
+              } else if (!nowSeven && completed) {
+                completed = false; // you asked to auto-uncheck when dropping below 7
+              }
+            }
+
+            return { ...g, daily, picked, completed };
+          }),
+        };
+      })
+    );
+  };
+
+  const shiftWeek = (delta: number) => {
+    logEvent(profileId, weekStamp, "week_nav", { delta, from: weekStamp });
+
+    const d = new Date(weekStart);
+    d.setUTCDate(d.getUTCDate() + delta * 7);
+    setWeekStart(d);
+  };
+
+  const goToCurrentWeek = () => {
+    setWeekStart(startOfWeekKolkata());
+  };
+
+  const weekLabel = useMemo(() => {
+    const end = new Date(weekStart);
+    end.setUTCDate(end.getUTCDate() + 6);
+    const intl = new Intl.DateTimeFormat("en-GB", {
+      month: "short",
+      day: "2-digit",
+    });
+    return `${intl.format(weekStart)} → ${intl.format(end)}`;
+  }, [weekStart]);
+
+  const modeInfo = isPast
+    ? {
+        text: "Past week — read only",
+        color: "bg-neutral-800",
+        icon: <Lock className="h-4 w-4" />,
+      }
+    : isFuture
+    ? {
+        text: "Future week — picking only (no completion)",
+        color: "bg-indigo-600",
+        icon: <CalendarClock className="h-4 w-4" />,
+      }
+    : {
+        text: "Current week — full access",
+        color: "bg-emerald-600",
+        icon: <CheckCircle2 className="h-4 w-4 text-white" />,
+      };
+
+  // Helper: pick a provider photo if available
+  function providerPhoto(u: any): string | null {
+    if (!u) return null;
+    if (u.photoURL) return u.photoURL as string;
+    const fromProvider = (u.providerData || []).find(
+      (p: any) => p?.photoURL
+    )?.photoURL;
+    return (fromProvider as string) || null;
+  }
+
+  // Load profile photoUrl once per signed-in user (no realtime listener)
+  const [profilePhotoUrl, setProfilePhotoUrl] = useState<string | null>(null);
+  useEffect(() => {
+    const { db } = ensureFirebase();
+    if (!authUser || !db) {
+      setProfilePhotoUrl(null);
+      return;
+    }
+
+    (async () => {
+      try {
+        const snap = await getDoc(doc(db, "profiles", authUser.uid));
+        setProfilePhotoUrl(
+          snap.exists() ? (snap.data() as any).photoUrl || null : null
+        );
+      } catch {
+        setProfilePhotoUrl(null);
+      }
+    })();
+  }, [authUser]);
+
+  // Final avatar URL: prefer uploaded profile photo over provider photo
+  const avatarUrl = useMemo(
+    () => profilePhotoUrl || providerPhoto(authUser),
+    [profilePhotoUrl, authUser]
+  );
 
   return (
     <div className="min-h-screen bg-[radial-gradient(1200px_600px_at_10%_0%,#eef2ff_0%,transparent_60%),radial-gradient(1200px_600px_at_90%_100%,#ecfeff_0%,transparent_60%)] bg-slate-50 p-5">
       <div className="mx-auto max-w-[1400px]">
         {/* Top Nav */}
-        <div className="mb-4 flex items-center justify-between">
-          <div className="flex items-center gap-2 rounded-2xl border border-neutral-300 bg-white p-1 shadow-sm">
-            <button onClick={() => setTab("goals") } className={`rounded-xl px-3 py-1.5 text-sm ${tab === "goals" ? "bg-black text-white" : "hover:bg-neutral-100"}`}>Goals</button>
-            <button onClick={() => setTab("profile")} className={`rounded-xl px-3 py-1.5 text-sm ${tab === "profile" ? "bg-black text-white" : "hover:bg-neutral-100"}`}>Profile</button>
-            <button onClick={() => setTab("auth")} className={`rounded-xl px-3 py-1.5 text-sm ${tab === "auth" ? "bg-black text-white" : "hover:bg-neutral-100"}`}>Account</button>
+        {/* Top Nav (responsive) */}
+        <div className="mb-4 flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
+          {/* Row 1 (mobile): Tabs left, auth right — same line/height */}
+          <div className="flex items-center justify-between">
+            {/* Tabs (unchanged) */}
+            <div className="flex items-center gap-2 rounded-2xl border border-neutral-300 bg-white p-1 shadow-sm">
+              <button
+                onClick={() => setTab("goals")}
+                className={`rounded-xl px-3 py-1.5 text-sm ${
+                  tab === "goals"
+                    ? "bg-black text-white"
+                    : "hover:bg-neutral-100"
+                }`}
+              >
+                Goals
+              </button>
+              <button
+                onClick={() => setTab("dashboard")}
+                className={`rounded-xl px-3 py-1.5 text-sm ${
+                  tab === "dashboard"
+                    ? "bg-black text-white"
+                    : "hover:bg-neutral-100"
+                }`}
+              >
+                Dashboard
+              </button>
+            </div>
+
+            {/* Auth block — show here on mobile only */}
+            <div className="md:hidden flex items-center gap-2">
+              {authUser ? (
+                <>
+                  <div className="relative group shrink-0">
+                    <button
+                      onClick={() => setTab("profile")}
+                      className="relative inline-flex h-9 w-9 items-center justify-center overflow-hidden rounded-full border border-neutral-300 bg-white shadow-sm hover:ring-2 hover:ring-neutral-200"
+                      title="Open profile"
+                    >
+                      {avatarUrl ? (
+                        <img
+                          src={avatarUrl}
+                          alt="User avatar"
+                          className="h-full w-full object-cover"
+                        />
+                      ) : (
+                        <User className="h-5 w-5 text-neutral-600" />
+                      )}
+                    </button>
+                    {/* hover tooltip */}
+                    <div className="pointer-events-none absolute right-0 z-50 mt-2 w-60 translate-y-1 opacity-0 transition-all duration-150 group-hover:translate-y-0 group-hover:opacity-100">
+                      <div className="rounded-xl border border-neutral-200 bg-white p-3 text-xs shadow-lg">
+                        <div className="font-medium text-neutral-900">
+                          {authUser.displayName || "User"}
+                        </div>
+                        <div className="mt-0.5 text-neutral-600">
+                          {authUser.email}
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+
+                  <button
+                    onClick={() => {
+                      signOut(getAuth());
+                      setTab("goals");
+                    }}
+                    className="shrink-0 rounded-xl border border-neutral-300 bg-white px-3 py-1.5 text-xs shadow-sm hover:bg-neutral-50"
+                  >
+                    Sign out
+                  </button>
+                </>
+              ) : (
+                <div className="relative group shrink-0">
+                  <button
+                    onClick={() => setTab("auth")}
+                    className="relative inline-flex h-9 w-9 items-center justify-center overflow-hidden rounded-full border border-neutral-300 bg-white shadow-sm hover:ring-2 hover:ring-neutral-200"
+                    title="Sign in"
+                  >
+                    <User className="h-5 w-5 text-neutral-600" />
+                  </button>
+                  {/* hover tooltip */}
+                  <div className="pointer-events-none absolute right-0 z-50 mt-2 w-44 translate-y-1 opacity-0 transition-all duration-150 group-hover:translate-y-0 group-hover:opacity-100">
+                    <div className="rounded-xl border border-neutral-200 bg-white p-3 text-xs shadow-lg">
+                      <div className="font-medium text-neutral-900">
+                        Sign in
+                      </div>
+                      <div className="mt-0.5 text-neutral-600">
+                        Click to log in
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              )}
+            </div>
           </div>
-          <div className="flex items-center gap-2">
+
+          {/* Row 2 (mobile): "Current week" button */}
+          {tab === "goals" && (isPast || isFuture) && (
+            <div className="md:hidden">
+              <button
+                onClick={goToCurrentWeek}
+                className="w-full rounded-xl border border-neutral-300 bg-white px-3 py-2 text-sm shadow-sm hover:bg-neutral-50"
+                title="Jump back to the current week"
+              >
+                ⏎ Current week
+              </button>
+            </div>
+          )}
+
+          {/* Row 3 (mobile): Prev / Date / Next in one row */}
+          {tab === "goals" && (
+            <div className="md:hidden flex items-center gap-2 sm:gap-3 max-w-full">
+              <button
+                onClick={() => {
+                  if (!authUser) {
+                    setGateOpen(true);
+                    return;
+                  }
+                  if (!prevWouldBeBeforeCreation) shiftWeek(-1);
+                }}
+                disabled={!!authUser && prevWouldBeBeforeCreation}
+                title={
+                  authUser && prevWouldBeBeforeCreation
+                    ? "No records exist before your account was created."
+                    : undefined
+                }
+                className="rounded-xl border border-neutral-300 bg-white px-3 py-1.5 text-xs shadow-sm hover:bg-neutral-50 disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                ◀ Prev
+              </button>
+
+              <div className="flex items-center gap-2 rounded-xl border border-neutral-300 bg-white px-3 py-2 text-sm shadow-sm">
+                <CalendarDays className="h-4 w-4" />
+                <span className="tabular-nums whitespace-nowrap">
+                  {weekLabel}
+                </span>
+              </div>
+
+              <button
+                onClick={() => {
+                  if (!authUser) {
+                    setGateOpen(true);
+                    return;
+                  }
+                  shiftWeek(1);
+                }}
+                className="rounded-xl border border-neutral-300 bg-white px-3 py-1.5 text-xs shadow-sm hover:bg-neutral-50"
+              >
+                Next ▶
+              </button>
+            </div>
+          )}
+
+          {/* Desktop / tablet: original right-side (nav + auth) */}
+          <div className="hidden md:flex flex-wrap items-center gap-2 sm:gap-3 max-w-full">
             {tab === "goals" && (
               <>
-                <button onClick={() => shiftWeek(-1)} className="rounded-xl border border-neutral-300 bg-white px-3 py-2 text-sm shadow-sm hover:bg-neutral-50">◀ Prev</button>
+                {(isPast || isFuture) && (
+                  <button
+                    onClick={goToCurrentWeek}
+                    className="rounded-xl border border-neutral-300 bg-white px-3 py-2 text-sm shadow-sm hover:bg-neutral-50"
+                    title="Jump back to the current week"
+                  >
+                    ⏎ Current week
+                  </button>
+                )}
+
+                <button
+                  onClick={() => {
+                    if (!authUser) {
+                      setGateOpen(true);
+                      return;
+                    }
+                    if (!prevWouldBeBeforeCreation) shiftWeek(-1);
+                  }}
+                  disabled={!!authUser && prevWouldBeBeforeCreation}
+                  title={
+                    authUser && prevWouldBeBeforeCreation
+                      ? "No records exist before your account was created."
+                      : undefined
+                  }
+                  className="rounded-xl border border-neutral-300 bg-white px-3 py-2 text-sm shadow-sm hover:bg-neutral-50 disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  ◀ Prev
+                </button>
+
                 <div className="flex items-center gap-2 rounded-xl border border-neutral-300 bg-white px-3 py-2 text-sm shadow-sm">
                   <CalendarDays className="h-4 w-4" />
-                  <span className="tabular-nums">{weekLabel}</span>
+                  <span className="tabular-nums whitespace-nowrap">
+                    {weekLabel}
+                  </span>
                 </div>
-                <button onClick={() => shiftWeek(1)} className="rounded-xl border border-neutral-300 bg-white px-3 py-2 text-sm shadow-sm hover:bg-neutral-50">Next ▶</button>
+
+                <button
+                  onClick={() => {
+                    if (!authUser) {
+                      setGateOpen(true);
+                      return;
+                    }
+                    shiftWeek(1);
+                  }}
+                  className="rounded-xl border border-neutral-300 bg-white px-3 py-2 text-sm shadow-sm hover:bg-neutral-50"
+                >
+                  Next ▶
+                </button>
               </>
             )}
+
+            {/* Auth block (desktop) */}
             {authUser ? (
-              <div className="ml-3 flex items-center gap-2 rounded-xl border border-neutral-300 bg-white px-3 py-1.5 text-xs shadow-sm">
-                <span className="max-w-[180px] truncate">{authUser.displayName || authUser.email}</span>
-                <button onClick={() => signOut(getAuth())} className="rounded-lg px-2 py-1 hover:bg-neutral-100">Sign out</button>
-              </div>
+              <>
+                <div className="relative group ml-2 shrink-0">
+                  <button
+                    onClick={() => setTab("profile")}
+                    className="relative inline-flex h-9 w-9 items-center justify-center overflow-hidden rounded-full border border-neutral-300 bg-white shadow-sm hover:ring-2 hover:ring-neutral-200"
+                    title="Open profile"
+                  >
+                    {avatarUrl ? (
+                      <img
+                        src={avatarUrl}
+                        alt="User avatar"
+                        className="h-full w-full object-cover"
+                      />
+                    ) : (
+                      <User className="h-5 w-5 text-neutral-600" />
+                    )}
+                  </button>
+                  {/* hover tooltip */}
+                  <div className="pointer-events-none absolute right-0 z-50 mt-2 w-60 translate-y-1 opacity-0 transition-all duration-150 group-hover:translate-y-0 group-hover:opacity-100">
+                    <div className="rounded-xl border border-neutral-200 bg-white p-3 text-xs shadow-lg">
+                      <div className="font-medium text-neutral-900">
+                        {authUser.displayName || "User"}
+                      </div>
+                      <div className="mt-0.5 text-neutral-600">
+                        {authUser.email}
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                <button
+                  onClick={() => {
+                    signOut(getAuth());
+                    goToCurrentWeek();
+                    setTab("goals");
+                  }}
+                  className="ml-2 shrink-0 rounded-xl border border-neutral-300 bg-white px-3 py-1.5 text-xs shadow-sm hover:bg-neutral-50"
+                >
+                  Sign out
+                </button>
+              </>
             ) : (
-              <button onClick={() => setTab("auth")} className="ml-2 rounded-xl border border-neutral-300 bg-white px-3 py-1.5 text-xs shadow-sm hover:bg-neutral-50">Sign in</button>
+              <div className="relative group ml-2 shrink-0">
+                <button
+                  onClick={() => setTab("auth")}
+                  className="relative inline-flex h-9 w-9 items-center justify-center overflow-hidden rounded-full border border-neutral-300 bg-white shadow-sm hover:ring-2 hover:ring-neutral-200"
+                  title="Sign in"
+                >
+                  <User className="h-5 w-5 text-neutral-600" />
+                </button>
+                {/* hover tooltip */}
+                <div className="pointer-events-none absolute right-0 z-50 mt-2 w-44 translate-y-1 opacity-0 transition-all duration-150 group-hover:translate-y-0 group-hover:opacity-100">
+                  <div className="rounded-xl border border-neutral-200 bg-white p-3 text-xs shadow-lg">
+                    <div className="font-medium text-neutral-900">Sign in</div>
+                    <div className="mt-0.5 text-neutral-600">
+                      Click to log in
+                    </div>
+                  </div>
+                </div>
+              </div>
             )}
           </div>
         </div>
@@ -226,86 +1054,317 @@ export default function GoalChallengeApp() {
                 The Goal Challenge!
               </h1>
               <p className="mt-1 text-sm md:text-base text-neutral-700">
-                Select any 2 goals from each category to follow and make your entire week exciting.
+                Select any 2 goals from each category to follow and make your
+                entire week exciting.
               </p>
             </div>
 
             {/* Milestones explainer */}
-            <div className="mb-2 grid grid-cols-1 gap-3 md:grid-cols-3">
+            <div className="mb-2 grid grid-cols-1 gap-3 md:grid-cols-4">
               <div className="flex items-start gap-3 rounded-2xl border border-emerald-200 bg-gradient-to-br from-emerald-50 to-lime-100 p-3">
-                <div className="rounded-xl bg-emerald-600/90 p-2 text-white"><Trophy className="h-5 w-5"/></div>
+                <div className="rounded-xl bg-emerald-600/90 p-2 text-white">
+                  <Trophy className="h-5 w-5" />
+                </div>
                 <div>
-                  <div className="text-sm font-semibold text-emerald-900">Brilliant</div>
-                  <div className="text-xs text-emerald-800/80">If you have completed <span className="font-semibold">2 activities</span> from <span className="font-semibold">all 6 categories</span>.</div>
+                  <div className="text-sm font-semibold text-emerald-900">
+                    Brilliant
+                  </div>
+                  <div className="text-xs text-emerald-800/80">
+                    Complete <span className="font-semibold">80%+</span> of your{" "}
+                    <span className="font-semibold">picked</span> goals.
+                  </div>
                 </div>
               </div>
               <div className="flex items-start gap-3 rounded-2xl border border-indigo-200 bg-gradient-to-br from-indigo-50 to-fuchsia-100 p-3">
-                <div className="rounded-xl bg-indigo-600/90 p-2 text-white"><Rocket className="h-5 w-5"/></div>
+                <div className="rounded-xl bg-indigo-600/90 p-2 text-white">
+                  <Rocket className="h-5 w-5" />
+                </div>
                 <div>
-                  <div className="text-sm font-semibold text-indigo-900">You rock</div>
-                  <div className="text-xs text-indigo-800/80">If you have completed <span className="font-semibold">2 activities</span> from <span className="font-semibold">4 categories</span>.</div>
+                  <div className="text-sm font-semibold text-indigo-900">
+                    You Rock
+                  </div>
+                  <div className="text-xs text-indigo-800/80">
+                    Complete <span className="font-semibold">50–79%</span> of
+                    picked goals.
+                  </div>
                 </div>
               </div>
               <div className="flex items-start gap-3 rounded-2xl border border-amber-200 bg-gradient-to-br from-amber-50 to-orange-100 p-3">
-                <div className="rounded-xl bg-amber-500/90 p-2 text-white"><Sparkles className="h-5 w-5"/></div>
+                <div className="rounded-xl bg-amber-500/90 p-2 text-white">
+                  <Sparkles className="h-5 w-5" />
+                </div>
                 <div>
-                  <div className="text-sm font-semibold text-amber-900">You're on the right track</div>
-                  <div className="text-xs text-amber-800/80">If you have completed <span className="font-semibold">2 activities</span> from <span className="font-semibold">2 categories</span>.</div>
+                  <div className="text-sm font-semibold text-amber-900">
+                    Right Track
+                  </div>
+                  <div className="text-xs text-amber-800/80">
+                    Complete <span className="font-semibold">20–49%</span> of
+                    picked goals.
+                  </div>
+                </div>
+              </div>
+              <div className="flex items-start gap-3 rounded-2xl border border-rose-200 bg-gradient-to-br from-rose-50 to-neutral-100 p-3">
+                <div className="rounded-xl bg-rose-500/90 p-2 text-white">
+                  <Sparkles className="h-5 w-5" />
+                </div>
+                <div>
+                  <div className="text-sm font-semibold text-rose-900">
+                    Need Improvement
+                  </div>
+                  <div className="text-xs text-rose-800/80">
+                    Complete <span className="font-semibold">below 20%</span> of
+                    picked goals.
+                  </div>
                 </div>
               </div>
             </div>
 
             {/* Mode badge */}
             <div className="mt-1">
-              <span className={`inline-flex items-center gap-2 rounded-full px-3 py-1 text-xs text-white ${modeInfo.color}`}>
+              <span
+                className={`inline-flex items-center gap-2 rounded-full px-3 py-1 text-xs text-white ${modeInfo.color}`}
+              >
                 {modeInfo.icon}
                 {modeInfo.text}
               </span>
             </div>
 
+            <div className="mt-2">
+              <span className="inline-flex items-center gap-2 rounded-full bg-black px-3 py-1 text-xs text-white">
+                <CheckCircle2 className="h-4 w-4" />
+                {completionPct}% complete{" "}
+                {totalPicked > 0
+                  ? `(${completedPicked}/${totalPicked})`
+                  : "(no goals picked)"}
+              </span>
+            </div>
+
             {/* Milestones */}
-            <div className="mt-4 grid grid-cols-1 gap-3 md:grid-cols-3">
-              <MilestoneCard level="right" active={achievedCount >= 2} label="On the Right Track" desc="2 categories with 2 completed" />
-              <MilestoneCard level="rocking" active={achievedCount >= 4} label="Rocking" desc="4 categories with 2 completed" />
-              <MilestoneCard level="brilliant" active={achievedCount === 6} label="Brilliant" desc="All 6 categories achieved" />
+            {/* Current milestone summary (single card with real % complete) */}
+            {/* Current milestone (compact on desktop, full-width on mobile) */}
+            {(() => {
+              // make label + desc dynamic and accurate
+              const labelMap = {
+                improve: "Need Improvement",
+                right: "Right Track",
+                rock: "You Rock",
+                brilliant: "Brilliant",
+              } as const;
+
+              // MilestoneCard uses "rocking" as its prop value, so map "rock" -> "rocking"
+              const cardLevel = (
+                milestoneLevel === "rock" ? "rocking" : milestoneLevel
+              ) as "brilliant" | "rocking" | "right" | "improve";
+
+              const desc =
+                totalPicked > 0
+                  ? `${completionPct}% of picked goals (${completedPicked}/${totalPicked})`
+                  : "No goals picked yet";
+
+              return (
+                !isFuture && (
+                  <div className="mt-4">
+                    {/* container limits width on md+ so it doesn't span the whole row */}
+                    <div className="w-full max-w-[420px]">
+                      <MilestoneCard
+                        level={cardLevel}
+                        active
+                        label={labelMap[milestoneLevel]}
+                        desc={desc}
+                      />
+                    </div>
+                  </div>
+                )
+              );
+            })()}
+
+            {/* Add Category (current + future) */}
+            <div className="mt-4 flex items-center gap-2">
+              <input
+                value={newCatName}
+                onChange={(e) => setNewCatName(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" && catNameValid) addCategory();
+                }}
+                placeholder={
+                  isPast
+                    ? "Cannot add categories in past weeks"
+                    : "Add a category name"
+                }
+                disabled={!canAddCategory}
+                className={`flex-1 rounded-xl border border-neutral-300 bg-white px-3 py-2 text-sm ${
+                  !canAddCategory ? "opacity-50" : ""
+                }`}
+              />
+              <button
+                onClick={addCategory}
+                disabled={!catNameValid}
+                className={`inline-flex items-center gap-1 rounded-xl bg-black px-3 py-2 text-xs text-white shadow-sm ${
+                  !catNameValid
+                    ? "opacity-50 cursor-not-allowed"
+                    : "hover:bg-neutral-800"
+                }`}
+              >
+                <Plus className="h-4 w-4" /> Add Category
+              </button>
             </div>
 
             {/* Columns */}
             {loadingWeek ? (
               <div className="mt-8 grid grid-cols-1 gap-5 md:grid-cols-2 lg:grid-cols-3">
                 {[...Array(6)].map((_, i) => (
-                  <div key={i} className="h-56 animate-pulse rounded-3xl border border-neutral-200 bg-white/60" />
+                  <div
+                    key={i}
+                    className="h-56 animate-pulse rounded-3xl border border-neutral-200 bg-white/60"
+                  />
                 ))}
               </div>
             ) : (
               <DndContext sensors={sensors} onDragEnd={onDragEnd}>
                 <div className="mt-6 grid grid-cols-1 gap-5 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-3">
-                  {categories.map(cat => {
-                    const pal = paletteFor(cat.name);
+                  {categories.map((cat) => {
+                    const pal = paletteFor(cat.name, cat.colorKey);
                     return (
-                      <div key={cat.id} className={`rounded-3xl border ${pal.border} ${pal.col} p-4 shadow-md`}>
+                      <div
+                        key={cat.id}
+                        className={`rounded-3xl border ${pal.border} ${pal.col} p-4 shadow-md`}
+                      >
                         <div className="mb-3 flex items-center justify-between">
-                          <h2 className={`text-lg font-semibold tracking-tight ${pal.heading}`}>{cat.name}</h2>
-                          <span className={`text-xs inline-flex items-center gap-2 rounded-full px-2 py-1 ${pal.chip}`}>
-                            {cat.goals.filter(g => g.completed).length}/2 completed
-                          </span>
+                          <div className="flex items-center gap-2">
+                            {renamingCatId === cat.id ? (
+                              <>
+                                <input
+                                  autoFocus
+                                  className={`rounded-lg border border-neutral-300 bg-white px-2 py-1 text-sm ${pal.heading}`}
+                                  value={renameText}
+                                  onChange={(e) =>
+                                    setRenameText(e.target.value)
+                                  }
+                                  onKeyDown={(e) => {
+                                    if (e.key === "Enter")
+                                      commitRenameCategory();
+                                    if (e.key === "Escape")
+                                      cancelRenameCategory();
+                                  }}
+                                  onBlur={commitRenameCategory}
+                                  placeholder="Category name"
+                                />
+                                <button
+                                  className="rounded-md p-1 text-emerald-600 hover:bg-emerald-50"
+                                  title="Save"
+                                  onMouseDown={(e) => e.preventDefault()}
+                                  onClick={commitRenameCategory}
+                                >
+                                  <Check className="h-4 w-4" />
+                                </button>
+                                <button
+                                  className="rounded-md p-1 text-rose-600 hover:bg-rose-50"
+                                  title="Cancel"
+                                  onMouseDown={(e) => e.preventDefault()}
+                                  onClick={cancelRenameCategory}
+                                >
+                                  <X className="h-4 w-4" />
+                                </button>
+                              </>
+                            ) : (
+                              <>
+                                <h2
+                                  className={`text-lg font-semibold tracking-tight ${pal.heading}`}
+                                >
+                                  {cat.name}
+                                </h2>
+                                {!isPast && (
+                                  <button
+                                    className="rounded-lg p-1.5 text-neutral-600 hover:bg-white/60"
+                                    title="Rename category"
+                                    onClick={() =>
+                                      startRenameCategory(cat.id, cat.name)
+                                    }
+                                  >
+                                    <Pencil className="h-4 w-4" />
+                                  </button>
+                                )}
+                              </>
+                            )}
+                          </div>
+
+                          <div className="flex items-center gap-2">
+                            <span
+                              className={`text-xs inline-flex items-center gap-2 rounded-full px-2 py-1 ${pal.chip}`}
+                            >
+                              {cat.goals.filter((g) => g.completed).length}/2
+                              completed
+                            </span>
+                            {!isPast && (
+                              <button
+                                className="rounded-lg p-1.5 text-neutral-600 hover:bg-white/60"
+                                title="Delete category"
+                                onClick={() =>
+                                  setConfirmDel({
+                                    open: true,
+                                    catId: cat.id,
+                                    title: cat.name,
+                                  })
+                                }
+                              >
+                                <Trash2 className="h-4 w-4" />
+                              </button>
+                            )}
+                          </div>
                         </div>
-                        <SortableContext items={cat.goals.map(g => g.id)} strategy={verticalListSortingStrategy}>
+
+                        <SortableContext
+                          items={cat.goals.map((g) => g.id)}
+                          strategy={verticalListSortingStrategy}
+                        >
                           <div className="flex flex-col gap-3">
-                            {cat.goals.map(goal => (
+                            {cat.goals.map((goal) => (
                               <SortableGoal
                                 key={goal.id}
                                 goal={goal}
                                 disabledDrag={isPast}
                                 disabledPick={isPast}
                                 disabledComplete={isPast || isFuture}
-                                onTogglePicked={() => togglePicked(cat.id, goal.id)}
-                                onToggleCompleted={() => toggleCompleted(cat.id, goal.id)}
-                                onRename={(newTitle) => renameGoal(cat.id, goal.id, newTitle)}
-                                onDuplicate={() => duplicateGoal(cat.id, goal.id)}
-                                onDelete={() => requestDelete(cat.id, goal.id, goal.title)}
+                                onTogglePicked={() =>
+                                  togglePicked(cat.id, goal.id)
+                                }
+                                onToggleCompleted={() =>
+                                  toggleCompleted(cat.id, goal.id)
+                                }
+                                onRename={(newTitle) =>
+                                  renameGoal(cat.id, goal.id, newTitle)
+                                }
+                                onDuplicate={() =>
+                                  duplicateGoal(cat.id, goal.id)
+                                }
+                                onDelete={() =>
+                                  requestDelete(cat.id, goal.id, goal.title)
+                                }
                                 disabledRename={isPast}
                                 disabledManage={isPast}
+                                // NEW
+                                onToggleTrackDaily={() =>
+                                  toggleTrackDaily(cat.id, goal.id)
+                                }
+                                onToggleDay={(i) =>
+                                  toggleDay(cat.id, goal.id, i)
+                                }
+                                disableDayChecks={isPast || isFuture}
+                                maxDayIndexAllowed={
+                                  weekStart.getTime() ===
+                                  currentWeekStart.getTime()
+                                    ? Math.min(
+                                        6,
+                                        Math.max(
+                                          0,
+                                          Math.floor(
+                                            (Date.now() - weekStart.getTime()) /
+                                              86400000
+                                          )
+                                        )
+                                      )
+                                    : undefined
+                                }
                               />
                             ))}
                           </div>
@@ -314,18 +1373,45 @@ export default function GoalChallengeApp() {
                         {/* Add new goal */}
                         <div className="mt-3 flex items-center gap-2">
                           <input
-                            value={newGoalText[cat.id] || ''}
-                            onChange={(e) => setNewGoalText(prev => ({ ...prev, [cat.id]: e.target.value }))}
-                            onKeyDown={(e) => { if (e.key === 'Enter') { addGoal(cat.id, (newGoalText[cat.id] || '').trim()); } }}
+                            value={newGoalText[cat.id] || ""}
+                            onChange={(e) =>
+                              setNewGoalText((prev) => ({
+                                ...prev,
+                                [cat.id]: e.target.value,
+                              }))
+                            }
+                            onKeyDown={(e) => {
+                              if (e.key === "Enter") {
+                                addGoal(
+                                  cat.id,
+                                  (newGoalText[cat.id] || "").trim()
+                                );
+                              }
+                            }}
                             placeholder="Add a new goal"
                             disabled={isPast}
-                            className={`flex-1 rounded-xl border border-neutral-300 bg-white px-3 py-2 text-sm ${isPast ? 'opacity-50' : ''}`}
+                            className={`flex-1 rounded-xl border border-neutral-300 bg-white px-3 py-2 text-sm ${
+                              isPast ? "opacity-50" : ""
+                            }`}
                           />
                           <button
-                            onClick={() => addGoal(cat.id, (newGoalText[cat.id] || '').trim())}
+                            onClick={() =>
+                              addGoal(
+                                cat.id,
+                                (newGoalText[cat.id] || "").trim()
+                              )
+                            }
                             disabled={isPast}
-                            className={`inline-flex items-center gap-1 rounded-xl bg-black px-3 py-2 text-xs text-white shadow-sm ${isPast ? 'opacity-50 cursor-not-allowed' : 'hover:bg-neutral-800'}`}
-                            title={isPast ? 'Cannot add goals in past weeks' : 'Add goal'}
+                            className={`inline-flex items-center gap-1 rounded-xl bg-black px-3 py-2 text-xs text-white shadow-sm ${
+                              isPast
+                                ? "opacity-50 cursor-not-allowed"
+                                : "hover:bg-neutral-800"
+                            }`}
+                            title={
+                              isPast
+                                ? "Cannot add goals in past weeks"
+                                : "Add goal"
+                            }
                           >
                             <Plus className="h-4 w-4" /> Add
                           </button>
@@ -339,10 +1425,37 @@ export default function GoalChallengeApp() {
           </>
         ) : tab === "profile" ? (
           <ProfilePage />
+        ) : tab === "dashboard" ? (
+          <DashboardPage
+            categories={categories}
+            weekLabel={weekLabel}
+            weekStamp={weekStamp}
+            profile={{
+              name: authUser?.displayName || null,
+              email: authUser?.email || null,
+            }}
+            profileId={profileId}
+            onGenerateReport={async () =>
+              await generateAIReport({
+                weekStamp,
+                profile: {
+                  name: authUser?.displayName || null,
+                  email: authUser?.email || null,
+                },
+                categories,
+              })
+            }
+          />
         ) : (
           <div>
             {authUser ? (
-              <div className="rounded-3xl border border-neutral-200 bg-white p-6 text-sm text-neutral-700 shadow-sm">You're signed in as <span className="font-medium">{authUser.displayName || authUser.email}</span>.</div>
+              <div className="rounded-3xl border border-neutral-200 bg-white p-6 text-sm text-neutral-700 shadow-sm">
+                You're signed in as{" "}
+                <span className="font-medium">
+                  {authUser.displayName || authUser.email}
+                </span>
+                .
+              </div>
             ) : null}
             <div className="mt-4">
               <AuthPage onSignedIn={() => setTab("goals")} />
@@ -351,21 +1464,47 @@ export default function GoalChallengeApp() {
         )}
 
         <div className="mt-10 text-center text-xs text-neutral-500">
-          Week starts on <span className="font-medium">Monday</span>. Your progress is saved per week — in the cloud when Firebase is configured, otherwise locally on this device.
+          Week starts on <span className="font-medium">Monday</span>.
         </div>
       </div>
 
       <ConfirmDialog
         open={confirmDel.open}
-        title="Delete this goal?"
-        description={confirmDel.title ? `This will remove "${confirmDel.title}" from this week.` : undefined}
+        title={
+          confirmDel.goalId ? "Delete this goal?" : "Delete this category?"
+        }
+        description={
+          confirmDel.title
+            ? confirmDel.goalId
+              ? `This will remove "${confirmDel.title}" from this week.`
+              : `This will remove the "${confirmDel.title}" category and its goals from this week.`
+            : undefined
+        }
         confirmText="Delete"
         cancelText="Cancel"
         onConfirm={confirmDelete}
         onCancel={() => setConfirmDel({ open: false })}
       />
 
-      <Toast show={toast.show} title={toast.title} subtitle={toast.subtitle} onClose={() => setToast(s => ({ ...s, show: false }))} />
+      <Toast
+        show={toast.show}
+        title={toast.title}
+        subtitle={toast.subtitle}
+        onClose={() => setToast((s) => ({ ...s, show: false }))}
+      />
+
+      <ConfirmDialog
+        open={gateOpen}
+        title="Sign in to browse past or future weeks"
+        description="Past and future weeks are available for registered users. Create an account or sign in to continue."
+        confirmText="Sign in"
+        cancelText="Not now"
+        onConfirm={() => {
+          setGateOpen(false);
+          setTab("auth");
+        }}
+        onCancel={() => setGateOpen(false)}
+      />
     </div>
   );
 }
