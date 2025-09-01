@@ -1,61 +1,34 @@
-import { initializeApp, getApps, getApp } from "firebase/app";
-import { getFirestore, initializeFirestore, doc, setDoc, getDoc, serverTimestamp } from "firebase/firestore";
+
+import { initializeApp } from "firebase/app";
+import { getFirestore, doc, setDoc, getDoc, serverTimestamp } from "firebase/firestore";
 import { getStorage } from "firebase/storage";
-import { getAuth } from "firebase/auth";
 import type { Category } from "../lib/core";
 import { DEFAULT_DATA, uid } from "../lib/core";
 
-// Inline fallback (yours) — keep your bucket as provided
-const HARDCODED = {
-  apiKey: "AIzaSyCi96DII_BSsZfn8FsdGkjTcUbYrwd_Yf4",
-  authDomain: "week-gaols.firebaseapp.com",
-  projectId: "week-gaols",
-  storageBucket: "week-gaols.firebasestorage.app", // keep as you confirmed
-  messagingSenderId: "213614122894",
-  appId: "1:213614122894:web:aa7c849086047a24ebb6df",
-};
-
-// Prefer env when available, else fallback to inline
 const FIREBASE_CONFIG = {
-  apiKey:  HARDCODED.apiKey,
-  authDomain:  HARDCODED.authDomain,
-  projectId:  HARDCODED.projectId,
-  storageBucket: HARDCODED.storageBucket,
-  messagingSenderId:  HARDCODED.messagingSenderId,
-  appId: HARDCODED.appId,
+  apiKey: (import.meta as any).env?.VITE_FIREBASE_API_KEY || "",
+  authDomain: (import.meta as any).env?.VITE_FIREBASE_AUTH_DOMAIN || "",
+  projectId: (import.meta as any).env?.VITE_FIREBASE_PROJECT_ID || "",
+  storageBucket: (import.meta as any).env?.VITE_FIREBASE_STORAGE_BUCKET || "",
+  messagingSenderId: (import.meta as any).env?.VITE_FIREBASE_MESSAGING_SENDER_ID || "",
+  appId: (import.meta as any).env?.VITE_FIREBASE_APP_ID || "",
 };
-
 const hasFirebaseConfig = () => !!(FIREBASE_CONFIG.apiKey && FIREBASE_CONFIG.projectId);
 
-// Keep singletons across HMR
-let cached: { app: any; db: any; storage: any; auth: any } | undefined;
-
+let _fbApp: any; let db: any; let storage: any;
 export function ensureFirebase() {
-  if (cached) return cached;
-  if (!hasFirebaseConfig()) return { app: undefined, db: undefined, storage: undefined, auth: undefined };
-
-  const app = getApps().length ? getApp() : initializeApp(FIREBASE_CONFIG);
-
-  // Initialize Firestore reliably (avoid watch/stream issues across HMR)
-  let db: any;
-  try {
-    db = initializeFirestore(app, { experimentalForceLongPolling: true, useFetchStreams: false });
-  } catch {
-    db = getFirestore(app);
+  if (!_fbApp && hasFirebaseConfig()) {
+    try {
+      _fbApp = initializeApp(FIREBASE_CONFIG);
+      db = getFirestore(_fbApp);
+      storage = getStorage(_fbApp);
+    } catch (e) { console.warn("Firebase init failed", e); }
   }
-  const storage = getStorage(app);
-  const auth = getAuth(app);
-
-  cached = { app, db, storage, auth };
-  return cached;
+  return { db, storage };
 }
 
 export function freshWeekTemplate(): Category[] {
-  return DEFAULT_DATA.map(c => ({
-    ...c,
-    id: uid(),
-    goals: c.goals.map(g => ({ ...g, id: uid(), picked: false, completed: false })),
-  }));
+  return DEFAULT_DATA.map(c => ({ ...c, id: uid(), goals: c.goals.map(g => ({ ...g, id: uid(), picked: false, completed: false })) }));
 }
 
 export async function loadWeekData(profileId: string, weekStamp: string): Promise<Category[]> {
@@ -67,12 +40,10 @@ export async function loadWeekData(profileId: string, weekStamp: string): Promis
         const data = snap.data() as any;
         if (Array.isArray(data.categories)) return data.categories as Category[];
       }
-    } catch (e) {
-      console.warn("loadWeekData firestore", e);
-    }
+    } catch (e) { console.warn("loadWeekData firestore", e); }
   }
   const local = localStorage.getItem(`goal-challenge:${weekStamp}`);
-  if (local) { try { return JSON.parse(local) as Category[]; } catch { /* ignore */ } }
+  if (local) { try { return JSON.parse(local) as Category[]; } catch {} }
   return freshWeekTemplate();
 }
 
@@ -85,9 +56,7 @@ export async function saveWeekData(profileId: string, weekStamp: string, categor
         { profileId, weekStamp, categories, updatedAt: serverTimestamp() },
         { merge: true }
       );
-    } catch (e) {
-      console.warn("saveWeekData firestore", e);
-    }
+    } catch (e) { console.warn("saveWeekData firestore", e); }
   }
   localStorage.setItem(`goal-challenge:${weekStamp}`, JSON.stringify(categories));
 }

@@ -45,12 +45,6 @@ export default function GoalChallengeApp() {
     return () => unsub();
   }, []);
 
-  // If user logs in while on Account tab, bounce back to Goals
-  useEffect(() => {
-    if (authUser && tab === "auth") setTab("goals");
-    
-  }, [authUser, tab]);
-
   // Week handling
   const [weekStart, setWeekStart] = useState<Date>(() => startOfWeekKolkata());
   const weekStamp = useMemo(() => fmtDateUTCYYYYMMDD(weekStart), [weekStart]);
@@ -141,10 +135,7 @@ export default function GoalChallengeApp() {
       saveWeekData(profileId, weekStamp, categories);
     }, 300);
     return () => { if (saveTimer.current) window.clearTimeout(saveTimer.current); };
-    
   }, [categories, profileId, weekStamp]);
-
- 
 
   // Stats & Milestones
   const achievedPerCategory = categories.map(c => c.goals.filter(g => g.completed).length >= 2);
@@ -203,9 +194,7 @@ export default function GoalChallengeApp() {
           <div className="flex items-center gap-2 rounded-2xl border border-neutral-300 bg-white p-1 shadow-sm">
             <button onClick={() => setTab("goals") } className={`rounded-xl px-3 py-1.5 text-sm ${tab === "goals" ? "bg-black text-white" : "hover:bg-neutral-100"}`}>Goals</button>
             <button onClick={() => setTab("profile")} className={`rounded-xl px-3 py-1.5 text-sm ${tab === "profile" ? "bg-black text-white" : "hover:bg-neutral-100"}`}>Profile</button>
-            {!authUser && (
-              <button onClick={() => setTab("auth")} className={`rounded-xl px-3 py-1.5 text-sm ${tab === "auth" ? "bg-black text-white" : "hover:bg-neutral-100"}`}>Account</button>
-            )}
+            <button onClick={() => setTab("auth")} className={`rounded-xl px-3 py-1.5 text-sm ${tab === "auth" ? "bg-black text-white" : "hover:bg-neutral-100"}`}>Account</button>
           </div>
           <div className="flex items-center gap-2">
             {tab === "goals" && (
@@ -219,15 +208,10 @@ export default function GoalChallengeApp() {
               </>
             )}
             {authUser ? (
-              <button
-  onClick={async () => {
-    await signOut(getAuth());
-    setTab("goals");           // ← go home after signing out
-  }}
-  className="rounded-lg px-2 py-1 hover:bg-neutral-100"
->
-  Sign out
-</button>
+              <div className="ml-3 flex items-center gap-2 rounded-xl border border-neutral-300 bg-white px-3 py-1.5 text-xs shadow-sm">
+                <span className="max-w-[180px] truncate">{authUser.displayName || authUser.email}</span>
+                <button onClick={() => signOut(getAuth())} className="rounded-lg px-2 py-1 hover:bg-neutral-100">Sign out</button>
+              </div>
             ) : (
               <button onClick={() => setTab("auth")} className="ml-2 rounded-xl border border-neutral-300 bg-white px-3 py-1.5 text-xs shadow-sm hover:bg-neutral-50">Sign in</button>
             )}
@@ -374,7 +358,7 @@ export default function GoalChallengeApp() {
       <ConfirmDialog
         open={confirmDel.open}
         title="Delete this goal?"
-        description={confirmDel.title ? `This will remove \"${confirmDel.title}\" from this week.` : undefined}
+        description={confirmDel.title ? `This will remove "${confirmDel.title}" from this week.` : undefined}
         confirmText="Delete"
         cancelText="Cancel"
         onConfirm={confirmDelete}
