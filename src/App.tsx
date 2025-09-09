@@ -1448,6 +1448,8 @@ export default function GoalChallengeApp() {
               email: authUser?.email || null,
             }}
             profileId={profileId}
+            authUser={authUser}
+            onSetTab={setTab}
             onGenerateReport={async () =>
               await generateAIReport({
                 weekStamp,

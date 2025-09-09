@@ -27,6 +27,7 @@ import {
   Target,
   Clock,
 } from "lucide-react";
+import ConfirmDialog from "../components/ConfirmDialog";
 
 /** ---------- Types ---------- */
 type WeeklyMetrics = {
@@ -349,6 +350,8 @@ export default function DashboardPage({
   weekStamp,
   profile,
   profileId,
+  authUser,
+  onSetTab,
   onGenerateReport, // optional override; if not provided we POST to /weekly-report
 }: {
   categories: Category[];
@@ -356,6 +359,8 @@ export default function DashboardPage({
   weekStamp: string; // e.g., 2025-08-18
   profile: { name?: string | null; email?: string | null } | null;
   profileId: string;
+  authUser?: any; // Firebase auth user
+  onSetTab?: (tab: string) => void; // Function to switch tabs
   onGenerateReport?: (args: {
     weekStamp: string;
     prompt?: string;
@@ -367,6 +372,9 @@ export default function DashboardPage({
   const [history, setHistory] = useState<SavedWeeklyReport[]>([]);
   const [report, setReport] = useState<string>("");
   const [loading, setLoading] = useState(false);
+  
+  // Modal for logged-out users who try to generate reports
+  const [gateOpen, setGateOpen] = useState(false);
 
   // load events (optional) + latest + short history
   useEffect(() => {
@@ -431,6 +439,12 @@ export default function DashboardPage({
   }, [saved, metrics]);
 
   async function generate() {
+    // Check if user is authenticated
+    if (!authUser) {
+      setGateOpen(true);
+      return;
+    }
+    
     setLoading(true);
     try {
       // Build a strong, explicit prompt the API can use directly.
@@ -765,6 +779,19 @@ export default function DashboardPage({
           )}
         </div>
       </div>
+
+      <ConfirmDialog
+        open={gateOpen}
+        title="Sign in to generate AI reports"
+        description="AI report generation is available for registered users. Create an account or sign in to continue."
+        confirmText="Sign in"
+        cancelText="Not now"
+        onConfirm={() => {
+          setGateOpen(false);
+          onSetTab?.("auth");
+        }}
+        onCancel={() => setGateOpen(false)}
+      />
     </div>
   );
 }
