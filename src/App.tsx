@@ -32,6 +32,7 @@ import Toast from "./components/Toast";
 import ConfirmDialog from "./components/ConfirmDialog";
 import MilestoneCard from "./components/MilestoneCard";
 import SortableGoal from "./components/SortableGoal";
+import { ThemeToggle } from "./components/ThemeToggle";
 
 // was: import { startOfWeekKolkata, fmtDateUTCYYYYMMDD, paletteFor, Category } from "./lib/core";
 import {
@@ -833,6 +834,8 @@ export default function GoalChallengeApp() {
                     </div>
                   </div>
 
+                  <ThemeToggle />
+
                   <button
                     onClick={() => {
                       signOut(getAuth());
@@ -844,26 +847,30 @@ export default function GoalChallengeApp() {
                   </button>
                 </>
               ) : (
-                <div className="relative group shrink-0">
-                  <button
-                    onClick={() => setTab("auth")}
-                    className="relative inline-flex h-9 w-9 items-center justify-center overflow-hidden rounded-full border border-neutral-300 bg-white shadow-sm hover:ring-2 hover:ring-neutral-200"
-                    title="Sign in"
-                  >
-                    <User className="h-5 w-5 text-neutral-600" />
-                  </button>
-                  {/* hover tooltip */}
-                  <div className="pointer-events-none absolute right-0 z-50 mt-2 w-44 translate-y-1 opacity-0 transition-all duration-150 group-hover:translate-y-0 group-hover:opacity-100">
-                    <div className="rounded-xl border border-neutral-200 bg-white p-3 text-xs shadow-lg">
-                      <div className="font-medium text-neutral-900">
-                        Sign in
-                      </div>
-                      <div className="mt-0.5 text-neutral-600">
-                        Click to log in
+                <>
+                  <div className="relative group shrink-0">
+                    <button
+                      onClick={() => setTab("auth")}
+                      className="relative inline-flex h-9 w-9 items-center justify-center overflow-hidden rounded-full border border-neutral-300 bg-white shadow-sm hover:ring-2 hover:ring-neutral-200"
+                      title="Sign in"
+                    >
+                      <User className="h-5 w-5 text-neutral-600" />
+                    </button>
+                    {/* hover tooltip */}
+                    <div className="pointer-events-none absolute right-0 z-50 mt-2 w-44 translate-y-1 opacity-0 transition-all duration-150 group-hover:translate-y-0 group-hover:opacity-100">
+                      <div className="rounded-xl border border-neutral-200 bg-white p-3 text-xs shadow-lg">
+                        <div className="font-medium text-neutral-900">
+                          Sign in
+                        </div>
+                        <div className="mt-0.5 text-neutral-600">
+                          Click to log in
+                        </div>
                       </div>
                     </div>
                   </div>
-                </div>
+                  
+                  <ThemeToggle />
+                </>
               )}
             </div>
           </div>
@@ -1012,6 +1019,8 @@ export default function GoalChallengeApp() {
                   </div>
                 </div>
 
+                <ThemeToggle />
+
                 <button
                   onClick={() => {
                     signOut(getAuth());
@@ -1024,24 +1033,28 @@ export default function GoalChallengeApp() {
                 </button>
               </>
             ) : (
-              <div className="relative group ml-2 shrink-0">
-                <button
-                  onClick={() => setTab("auth")}
-                  className="relative inline-flex h-9 w-9 items-center justify-center overflow-hidden rounded-full border border-neutral-300 bg-white shadow-sm hover:ring-2 hover:ring-neutral-200"
-                  title="Sign in"
-                >
-                  <User className="h-5 w-5 text-neutral-600" />
-                </button>
-                {/* hover tooltip */}
-                <div className="pointer-events-none absolute right-0 z-50 mt-2 w-44 translate-y-1 opacity-0 transition-all duration-150 group-hover:translate-y-0 group-hover:opacity-100">
-                  <div className="rounded-xl border border-neutral-200 bg-white p-3 text-xs shadow-lg">
-                    <div className="font-medium text-neutral-900">Sign in</div>
-                    <div className="mt-0.5 text-neutral-600">
-                      Click to log in
+              <>
+                <div className="relative group ml-2 shrink-0">
+                  <button
+                    onClick={() => setTab("auth")}
+                    className="relative inline-flex h-9 w-9 items-center justify-center overflow-hidden rounded-full border border-neutral-300 bg-white shadow-sm hover:ring-2 hover:ring-neutral-200"
+                    title="Sign in"
+                  >
+                    <User className="h-5 w-5 text-neutral-600" />
+                  </button>
+                  {/* hover tooltip */}
+                  <div className="pointer-events-none absolute right-0 z-50 mt-2 w-44 translate-y-1 opacity-0 transition-all duration-150 group-hover:translate-y-0 group-hover:opacity-100">
+                    <div className="rounded-xl border border-neutral-200 bg-white p-3 text-xs shadow-lg">
+                      <div className="font-medium text-neutral-900">Sign in</div>
+                      <div className="mt-0.5 text-neutral-600">
+                        Click to log in
+                      </div>
                     </div>
                   </div>
                 </div>
-              </div>
+                
+                <ThemeToggle />
+              </>
             )}
           </div>
         </div>
