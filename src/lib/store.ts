@@ -174,7 +174,10 @@ export async function saveWeekData(
   weekStamp: string,
   categories: Category[]
 ) {
+  let savedToFirestore = false;
   const { db } = ensureFirebase();
+
+  // Try to save to Firestore first
   if (db) {
     try {
       await setDoc(
@@ -188,13 +191,23 @@ export async function saveWeekData(
       if (weekStamp === currentStamp) {
         await saveTemplateFromCurrentWeek(profileId, categories);
       }
+
+      savedToFirestore = true;
     } catch (e) {
-      console.warn("saveWeekData firestore", e);
+      console.warn("saveWeekData firestore failed, falling back to localStorage", e);
     }
   }
 
-  // (Optional) Legacy local fallback
-  //localStorage.setItem(`goal-challenge:${weekStamp}`, JSON.stringify(categories));
+  // Always save to localStorage as backup, especially important for anonymous users
+  // This ensures data persistence when user is not authenticated or Firebase fails
+  try {
+    localStorage.setItem(`goal-challenge:${weekStamp}`, JSON.stringify(categories));
+    if (!savedToFirestore) {
+      console.log(`Data saved to localStorage for week ${weekStamp} (profileId: ${profileId})`);
+    }
+  } catch (e) {
+    console.warn("localStorage save failed", e);
+  }
 }
 
 export async function migrateLocalWeeks(profileId: string) {
@@ -232,6 +245,243 @@ export async function migrateLocalWeeks(profileId: string) {
   }
 
   localStorage.setItem(flagKey, "1");
+}
+
+/**
+ * Syncs anonymous user data to authenticated user account after login
+ * This merges local data with Firebase data, preserving user's work from before login
+ */
+export async function syncAnonymousToAuthenticatedUser(
+  anonymousProfileId: string,
+  authenticatedProfileId: string
+) {
+  if (!anonymousProfileId || !authenticatedProfileId || anonymousProfileId === authenticatedProfileId) {
+    return;
+  }
+
+  const { db } = ensureFirebase();
+  if (!db) return;
+
+  try {
+    console.log(`Starting sync from anonymous ${anonymousProfileId} to authenticated ${authenticatedProfileId}`);
+
+    // 1. Get all localStorage data for the anonymous user
+    const prefix = "goal-challenge:";
+    const allLocalKeys = Object.keys(localStorage);
+    const localKeys = allLocalKeys.filter(
+      (k) => k.startsWith(prefix) && /^\d{4}-\d{2}-\d{2}$/.test(k.slice(prefix.length))
+    );
+
+    console.log("All localStorage keys:", allLocalKeys);
+    console.log("Filtered week keys:", localKeys);
+
+    // 2. Get all Firebase data for the anonymous user (if any was synced)
+    const anonymousData = new Map<string, Category[]>();
+
+    // Check Firebase for anonymous user data
+    for (const key of localKeys) {
+      const weekStamp = key.slice(prefix.length);
+      try {
+        const anonymousDoc = await getDoc(doc(db, "weeklyGoals", `${anonymousProfileId}_${weekStamp}`));
+        if (anonymousDoc.exists()) {
+          const data = anonymousDoc.data() as any;
+          if (Array.isArray(data.categories)) {
+            anonymousData.set(weekStamp, data.categories);
+          }
+        }
+      } catch (e) {
+        console.warn(`Error fetching anonymous Firebase data for ${weekStamp}:`, e);
+      }
+    }
+
+    // 3. Also check localStorage for any unsaved data
+    for (const key of localKeys) {
+      const weekStamp = key.slice(prefix.length);
+      try {
+        const raw = localStorage.getItem(key);
+        if (raw) {
+          const localCategories = JSON.parse(raw) as Category[];
+          console.log(`Found localStorage data for ${weekStamp}:`, localCategories.length, "categories");
+
+          // Use localStorage data if we don't have Firebase data, or if localStorage is newer
+          if (!anonymousData.has(weekStamp)) {
+            anonymousData.set(weekStamp, localCategories);
+          }
+        }
+      } catch (e) {
+        console.warn(`Error parsing localStorage data for ${key}:`, e);
+      }
+    }
+
+    if (anonymousData.size === 0) {
+      console.log("No anonymous data found to sync");
+      // Still mark as synced to avoid repeated checks
+      localStorage.setItem(`goal-challenge:synced:${authenticatedProfileId}`, "1");
+      return;
+    }
+
+    // 4. For each week with anonymous data, merge with authenticated user data
+    for (const [weekStamp, anonymousCategories] of anonymousData) {
+      try {
+        const authenticatedRef = doc(db, "weeklyGoals", `${authenticatedProfileId}_${weekStamp}`);
+        const authenticatedSnap = await getDoc(authenticatedRef);
+
+        let finalCategories: Category[] = anonymousCategories;
+
+        if (authenticatedSnap.exists()) {
+          // Authenticated user has data for this week - merge intelligently
+          const authenticatedData = authenticatedSnap.data() as any;
+          const authenticatedCategories: Category[] = authenticatedData.categories || [];
+
+          // Smart merge: preserve user's progress from anonymous session
+          finalCategories = mergeWeekData(anonymousCategories, authenticatedCategories);
+          console.log(`Merged data for week ${weekStamp}: ${anonymousCategories.length} anonymous + ${authenticatedCategories.length} authenticated categories`);
+        } else {
+          // No authenticated data for this week, use anonymous data as-is
+          console.log(`Using anonymous data for week ${weekStamp}: ${anonymousCategories.length} categories`);
+        }
+
+        // Save merged data to authenticated user
+        await setDoc(
+          authenticatedRef,
+          {
+            profileId: authenticatedProfileId,
+            weekStamp,
+            categories: finalCategories,
+            updatedAt: serverTimestamp(),
+            syncedFromAnonymous: true // Flag to indicate this was synced
+          },
+          { merge: true }
+        );
+
+        // Clean up anonymous data from Firebase
+        try {
+          const anonymousRef = doc(db, "weeklyGoals", `${anonymousProfileId}_${weekStamp}`);
+          const anonymousSnap = await getDoc(anonymousRef);
+          if (anonymousSnap.exists()) {
+            // Delete anonymous document rather than overwrite
+            // We'll let it stay but not actively clean up to avoid data loss
+            console.log(`Anonymous Firebase data preserved for ${weekStamp} (not deleted for safety)`);
+          }
+        } catch (e) {
+          console.warn(`Error cleaning up anonymous Firebase data for ${weekStamp}:`, e);
+        }
+
+      } catch (e) {
+        console.warn(`Error syncing week ${weekStamp}:`, e);
+      }
+    }
+
+    // 5. Clean up localStorage
+    for (const key of localKeys) {
+      try {
+        localStorage.removeItem(key);
+        console.log(`Removed localStorage key: ${key}`);
+      } catch (e) {
+        console.warn(`Error removing localStorage key ${key}:`, e);
+      }
+    }
+
+    // 6. Migrate template if exists
+    try {
+      const templateSnap = await getDoc(doc(db, "weeklyTemplates", anonymousProfileId));
+      if (templateSnap.exists()) {
+        const templateData = templateSnap.data();
+        await setDoc(
+          doc(db, "weeklyTemplates", authenticatedProfileId),
+          {
+            ...templateData,
+            updatedAt: serverTimestamp(),
+            syncedFromAnonymous: true
+          },
+          { merge: true }
+        );
+        console.log("Synced weekly template");
+      }
+    } catch (e) {
+      console.warn("Error syncing template:", e);
+    }
+
+    // 7. Set sync completion flag
+    localStorage.setItem(`goal-challenge:synced:${authenticatedProfileId}`, "1");
+    console.log(`Sync completed for ${authenticatedProfileId}`);
+
+  } catch (e) {
+    console.error("Error during anonymous-to-authenticated sync:", e);
+  }
+}
+
+/**
+ * Intelligently merges anonymous and authenticated week data
+ * Prioritizes user progress (picks, completions) from anonymous data
+ * while preserving any additional goals from authenticated data
+ */
+function mergeWeekData(anonymousCategories: Category[], authenticatedCategories: Category[]): Category[] {
+  const merged: Category[] = [];
+  const authenticatedMap = new Map(authenticatedCategories.map(cat => [cat.name, cat]));
+
+  // Start with anonymous categories (preserve user's recent work)
+  for (const anonCat of anonymousCategories) {
+    const authCat = authenticatedMap.get(anonCat.name);
+
+    if (!authCat) {
+      // Category only exists in anonymous data, keep as-is
+      merged.push(anonCat);
+    } else {
+      // Category exists in both, merge goals intelligently
+      const mergedGoals = mergeGoals(anonCat.goals, authCat.goals);
+      merged.push({
+        ...anonCat, // Preserve anonymous category settings
+        goals: mergedGoals
+      });
+      authenticatedMap.delete(anonCat.name); // Mark as processed
+    }
+  }
+
+  // Add any remaining authenticated categories that weren't in anonymous data
+  for (const [_, authCat] of authenticatedMap) {
+    merged.push(authCat);
+  }
+
+  return merged;
+}
+
+/**
+ * Merges goal arrays, prioritizing progress from anonymous user
+ */
+function mergeGoals(anonymousGoals: any[], authenticatedGoals: any[]): any[] {
+  const merged: any[] = [];
+  const authenticatedMap = new Map(authenticatedGoals.map(goal => [goal.title, goal]));
+
+  // Start with anonymous goals (preserve user's recent work)
+  for (const anonGoal of anonymousGoals) {
+    const authGoal = authenticatedMap.get(anonGoal.title);
+
+    if (!authGoal) {
+      // Goal only exists in anonymous data
+      merged.push(anonGoal);
+    } else {
+      // Goal exists in both, prefer anonymous progress but merge other data
+      merged.push({
+        ...authGoal,
+        // Preserve progress from anonymous session
+        picked: anonGoal.picked || authGoal.picked,
+        completed: anonGoal.completed || authGoal.completed,
+        trackDaily: anonGoal.trackDaily || authGoal.trackDaily,
+        daily: anonGoal.daily || authGoal.daily,
+        // Use anonymous ID to maintain consistency
+        id: anonGoal.id
+      });
+      authenticatedMap.delete(anonGoal.title); // Mark as processed
+    }
+  }
+
+  // Add any authenticated goals that weren't in anonymous data
+  for (const [_, authGoal] of authenticatedMap) {
+    merged.push(authGoal);
+  }
+
+  return merged;
 }
 
 // bump simple local counters for quick UI

@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from "react";
 import { doc, setDoc, serverTimestamp, getDoc } from "firebase/firestore";
-import { ensureFirebase } from "../lib/store";
+import { ensureFirebase, syncAnonymousToAuthenticatedUser } from "../lib/store";
 import {
   getAuth,
   createUserWithEmailAndPassword,
@@ -26,21 +26,42 @@ export default function AuthPage({ onSignedIn }: { onSignedIn?: () => void }) {
   const afterAuth = async (user: any, fallbackName?: string) => {
     // Navigate immediately for snappy UX
     onSignedIn?.();
-  
-    // Fire-and-forget persistence; don't block UI
+
+    // Fire-and-forget persistence and sync; don't block UI
     (async () => {
       try {
         const { db } = ensureFirebase();
         if (!db || !user) return;
-  
+
         const displayName = user.displayName || fallbackName || "";
         const photoURL = user.photoURL || "";
         const providerIds = (user.providerData || []).map((p: any) => p?.providerId);
-  
+
+        // Check if this is a new login that needs anonymous data sync
+        const profileIdKey = "goal-challenge:profileId";
+        const anonymousProfileId = localStorage.getItem(profileIdKey);
+        const authenticatedProfileId = user.uid;
+
+        // Only sync if we have an anonymous ID and it's different from auth ID
+        if (anonymousProfileId && anonymousProfileId !== authenticatedProfileId) {
+          const syncKey = `goal-challenge:synced:${authenticatedProfileId}`;
+          const alreadySynced = localStorage.getItem(syncKey) === "1";
+
+          if (!alreadySynced) {
+            console.log("Triggering anonymous data sync from AuthPage...");
+            try {
+              await syncAnonymousToAuthenticatedUser(anonymousProfileId, authenticatedProfileId);
+              console.log("AuthPage sync completed");
+            } catch (e) {
+              console.error("AuthPage sync failed:", e);
+            }
+          }
+        }
+
         // ----- users -----
         const userRef = doc(db, "users", user.uid);
         const userSnap = await getDoc(userRef);
-  
+
         const userPayload: any = {
           uid: user.uid,
           email: user.email,
@@ -54,11 +75,11 @@ export default function AuthPage({ onSignedIn }: { onSignedIn?: () => void }) {
           userPayload.createdAt = serverTimestamp();
         }
         await setDoc(userRef, userPayload, { merge: true });
-  
+
         // ----- profiles -----
         const profileRef = doc(db, "profiles", user.uid);
         const profileSnap = await getDoc(profileRef);
-  
+
         const profilePayload: any = {
           name: displayName,
           email: user.email,

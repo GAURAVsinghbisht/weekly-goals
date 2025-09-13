@@ -49,6 +49,7 @@ import {
   ensureFirebase,
   migrateLocalWeeks,
   logEvent,
+  syncAnonymousToAuthenticatedUser,
 } from "./lib/store";
 import ProfilePage from "./pages/ProfilePage";
 import AuthPage from "./pages/AuthPage";
@@ -86,16 +87,53 @@ export default function GoalChallengeApp() {
   useEffect(() => {
     ensureFirebase();
     const auth = getAuth();
-    const unsub = onAuthStateChanged(auth, (u) => {
-      setAuthUser(u);
-      if (u?.uid) setProfileId(u.uid);
-      else {
+    const unsub = onAuthStateChanged(auth, async (u) => {
+      console.log("Auth state changed:", { user: !!u, uid: u?.uid });
+
+      if (u?.uid) {
+        // User signed in
+        const previousProfileId = profileId;
+        const newProfileId = u.uid;
+
+        console.log("Sign in detected:", { previousProfileId, newProfileId, wasAnonymous: previousProfileId !== newProfileId });
+
+        // Check if this is a transition from anonymous to authenticated
+        if (previousProfileId && previousProfileId !== newProfileId) {
+          // Check if sync hasn't been done already
+          const syncKey = `goal-challenge:synced:${newProfileId}`;
+          const alreadySynced = localStorage.getItem(syncKey) === "1";
+
+          if (!alreadySynced) {
+            console.log("Starting sync from anonymous to authenticated user...");
+            console.log("Anonymous profileId:", previousProfileId);
+            console.log("Authenticated profileId:", newProfileId);
+
+            try {
+              await syncAnonymousToAuthenticatedUser(previousProfileId, newProfileId);
+              console.log("Sync completed successfully");
+            } catch (e) {
+              console.error("Sync failed:", e);
+            }
+          } else {
+            console.log("Sync already completed for this user");
+          }
+        }
+
+        setAuthUser(u);
+        setProfileId(newProfileId);
+      } else {
+        // User signed out
+        console.log("User signed out");
+        setAuthUser(null);
         const anon = localStorage.getItem(profileIdKey);
-        if (anon) setProfileId(anon);
+        if (anon) {
+          console.log("Using anonymous profileId:", anon);
+          setProfileId(anon);
+        }
       }
     });
     return () => unsub();
-  }, []);
+  }, []); // Remove dependencies to avoid infinite loop
 
   // Week handling
   const [weekStart, setWeekStart] = useState<Date>(() => startOfWeekKolkata());
@@ -1449,7 +1487,7 @@ export default function GoalChallengeApp() {
             }}
             profileId={profileId}
             authUser={authUser}
-            onSetTab={setTab}
+            onSetTab={(tab: string) => setTab(tab as "goals" | "profile" | "auth" | "dashboard")}
             onGenerateReport={async () =>
               await generateAIReport({
                 weekStamp,
