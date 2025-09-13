@@ -11,8 +11,26 @@
 }
 
 /* Base styles for smooth theme transitions */
-* {
-  transition: background-color 0.2s ease-in-out, border-color 0.2s ease-in-out, color 0.2s ease-in-out;
+:root {
+  --transition-duration: 0.15s;
+  --transition-easing: ease-out;
+}
+
+/* Apply transitions selectively to avoid flicker */
+body,
+[class*="bg-"],
+[class*="text-"],
+[class*="border-"],
+.transition-colors {
+  transition:
+    background-color var(--transition-duration) var(--transition-easing),
+    border-color var(--transition-duration) var(--transition-easing),
+    color var(--transition-duration) var(--transition-easing);
+}
+
+/* Disable transitions during theme toggle to prevent flicker */
+.theme-transitioning * {
+  transition: none !important;
 }
 
 /* Dark theme overrides */

@@ -36,12 +36,21 @@ export const useThemeLogic = () => {
 
   useEffect(() => {
     const root = document.documentElement;
+
+    // Temporarily disable transitions to prevent flicker
+    root.classList.add('theme-transitioning');
+
     if (theme === 'dark') {
       root.classList.add('dark');
     } else {
       root.classList.remove('dark');
     }
     localStorage.setItem('theme', theme);
+
+    // Re-enable transitions after theme is applied
+    requestAnimationFrame(() => {
+      root.classList.remove('theme-transitioning');
+    });
   }, [theme]);
 
   const toggleTheme = () => {
