@@ -111,16 +111,38 @@ export default function GoalChallengeApp() {
             try {
               await syncAnonymousToAuthenticatedUser(previousProfileId, newProfileId);
               console.log("Sync completed successfully");
+
+              // Update profile ID in localStorage and state
+              localStorage.setItem(profileIdKey, newProfileId);
+              setProfileId(newProfileId);
+              setAuthUser(u);
+
+              // Force reload current week data after sync to show the synced data
+              console.log("Forcing reload of week data after sync...");
+              const currentWeekStamp = fmtDateUTCYYYYMMDD(startOfWeekKolkata());
+              const data = await loadWeekData(newProfileId, currentWeekStamp);
+              setCategories(data);
+              console.log("Week data reloaded after sync, categories:", data.length);
+
             } catch (e) {
               console.error("Sync failed:", e);
+              // Still update auth state even if sync fails
+              localStorage.setItem(profileIdKey, newProfileId);
+              setAuthUser(u);
+              setProfileId(newProfileId);
             }
           } else {
             console.log("Sync already completed for this user");
+            localStorage.setItem(profileIdKey, newProfileId);
+            setAuthUser(u);
+            setProfileId(newProfileId);
           }
+        } else {
+          // No sync needed, just update auth state
+          localStorage.setItem(profileIdKey, newProfileId);
+          setAuthUser(u);
+          setProfileId(newProfileId);
         }
-
-        setAuthUser(u);
-        setProfileId(newProfileId);
       } else {
         // User signed out
         console.log("User signed out");
@@ -133,7 +155,7 @@ export default function GoalChallengeApp() {
       }
     });
     return () => unsub();
-  }, []); // Remove dependencies to avoid infinite loop
+  }, []); // Remove weekStamp dependency to avoid circular reference
 
   // Week handling
   const [weekStart, setWeekStart] = useState<Date>(() => startOfWeekKolkata());
